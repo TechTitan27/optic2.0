@@ -1,0 +1,6 @@
+{
+  "name": "Optic",
+  "description": "Cloud infrastructure for developers. Optic brings cloud storage, static website hosting, deployments, and developer infrastructure together in Optic Cloud and Optic Hosting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

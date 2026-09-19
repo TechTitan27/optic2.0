@@ -1,0 +1,6 @@
+# Optic robots.txt
+User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://optic.doy.best/sitemap.xml
