@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { notifyToast } from '../../context/ToastContext';
 import { OpticLogo } from '../brand/OpticLogo';
 import { getSupabase } from '../../lib/supabaseClient';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
@@ -36,53 +37,159 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   // Handle OAuth or email confirmation callback
   useEffect(() => {
     if (mode === 'callback') {
+      let cancelled = false;
       const handleCallback = async () => {
         setCallbackState('verifying');
         try {
-          const sb = getSupabase();
-          if (sb) {
-            // Check session from URL hash / query parameters
-            const { data, error: sessionErr } = await sb.auth.getSession();
-            if (sessionErr) throw sessionErr;
+          const searchParams = new URLSearchParams(window.location.search);
+          const rawHash = window.location.hash.startsWith('#')
+            ? window.location.hash.substring(1)
+            : window.location.hash;
+          const hashParams = new URLSearchParams(rawHash);
 
-            if (data.session) {
-              setCallbackState('success');
-              // If opened in popup, postMessage to parent opener and close
-              if (window.opener && window.opener !== window) {
-                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+          // 1. Check for error parameters returned by OAuth provider or Supabase
+          const errorDesc =
+            searchParams.get('error_description') ||
+            searchParams.get('error') ||
+            hashParams.get('error_description') ||
+            hashParams.get('error');
+
+          if (errorDesc) {
+            const decoded = decodeURIComponent(errorDesc.replace(/\+/g, ' '));
+            if (!cancelled) {
+              setError(decoded);
+              setCallbackState('error');
+              notifyToast({
+                type: 'error',
+                title: 'Authentication Callback Failed',
+                message: decoded,
+              });
+            }
+            return;
+          }
+
+          const sb = getSupabase();
+          if (!sb) {
+            if (!cancelled) {
+              setError('Supabase client is not configured.');
+              setCallbackState('error');
+            }
+            return;
+          }
+
+          // 2. PKCE code exchange if 'code' is present
+          const code = searchParams.get('code');
+          if (code) {
+            try {
+              const { data: exchangeData, error: exchangeErr } =
+                await sb.auth.exchangeCodeForSession(code);
+              if (exchangeErr) {
+                console.warn('PKCE exchange error:', exchangeErr.message);
+              } else if (exchangeData?.session) {
+                if (cancelled) return;
+                setCallbackState('success');
+                notifyToast({
+                  type: 'success',
+                  title: 'Sign-in Successful',
+                  message: `Welcome back, ${exchangeData.session.user?.email || 'developer'}!`,
+                });
+                if (window.opener && window.opener !== window) {
+                  try {
+                    window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+                  } catch {
+                    // ignore
+                  }
+                  setTimeout(() => window.close(), 300);
+                  return;
+                }
                 setTimeout(() => {
-                  window.close();
+                  onNavigate(redirectSurface, redirectPath);
                 }, 400);
                 return;
               }
+            } catch (pkceErr: any) {
+              console.warn('PKCE exception:', pkceErr);
+            }
+          }
 
+          // 3. Check existing session (Supabase automatically parses hash tokens)
+          const { data, error: sessionErr } = await sb.auth.getSession();
+          if (sessionErr) throw sessionErr;
+
+          if (data.session) {
+            if (cancelled) return;
+            setCallbackState('success');
+            notifyToast({
+              type: 'success',
+              title: 'Sign-in Successful',
+              message: `Welcome back, ${data.session.user?.email || 'developer'}!`,
+            });
+            if (window.opener && window.opener !== window) {
+              try {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+              } catch {
+                // ignore
+              }
+              setTimeout(() => window.close(), 300);
+              return;
+            }
+            setTimeout(() => {
+              onNavigate(redirectSurface, redirectPath);
+            }, 400);
+            return;
+          }
+
+          // 4. Brief retry cycle (in case Supabase onAuthStateChange is asynchronously finishing token storage)
+          for (let attempt = 0; attempt < 4; attempt++) {
+            await new Promise((r) => setTimeout(r, 500));
+            if (cancelled) return;
+            const { data: retryData } = await sb.auth.getSession();
+            if (retryData?.session) {
+              setCallbackState('success');
+              notifyToast({
+                type: 'success',
+                title: 'Sign-in Successful',
+                message: `Welcome back, ${retryData.session.user?.email || 'developer'}!`,
+              });
+              if (window.opener && window.opener !== window) {
+                try {
+                  window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+                } catch {
+                  // ignore
+                }
+                setTimeout(() => window.close(), 300);
+                return;
+              }
               setTimeout(() => {
                 onNavigate(redirectSurface, redirectPath);
-              }, 500);
+              }, 400);
               return;
             }
           }
 
-          // In case the session is still exchanging in background
-          if (window.opener && window.opener !== window) {
-            window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
-            setTimeout(() => {
-              window.close();
-            }, 500);
-            return;
+          // If reached here with no session and no error in params
+          if (!cancelled) {
+            setError('No active session found from this authentication callback. Please sign in again.');
+            setCallbackState('error');
           }
-
-          setCallbackState('success');
-          setTimeout(() => {
-            onNavigate(redirectSurface, redirectPath);
-          }, 600);
         } catch (err: any) {
-          setError(err?.message || 'Authentication verification failed.');
-          setCallbackState('error');
+          if (!cancelled) {
+            const msg = err?.message || 'Authentication verification failed.';
+            setError(msg);
+            setCallbackState('error');
+            notifyToast({
+              type: 'error',
+              title: 'Authentication Callback Error',
+              message: msg,
+            });
+          }
         }
       };
 
       handleCallback();
+      return () => {
+        cancelled = true;
+      };
     }
   }, [mode, redirectSurface, redirectPath, onNavigate]);
 

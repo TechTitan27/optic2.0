@@ -19,6 +19,17 @@
     <link rel="apple-touch-icon" href="/assets/logo-dark.png" />
   </head>
   <body>
+    <script>
+      (function() {
+        var redirect = window.location.search.match(/[?&]p=([^&]+)/);
+        if (redirect && redirect[1]) {
+          var path = decodeURIComponent(redirect[1]).replace(/~and~/g, '&');
+          var query = window.location.search.match(/[?&]q=([^&]+)/);
+          var search = query && query[1] ? '?' + decodeURIComponent(query[1]).replace(/~and~/g, '&') : '';
+          window.history.replaceState(null, null, path + search + window.location.hash);
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

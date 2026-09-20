@@ -1,4 +1,16 @@
-export type SurfaceType = 'main' | 'dashboard' | 'cloud' | 'hosting' | 'docs' | 'settings' | 'login' | 'signup' | 'callback' | 'privacy' | 'terms';
+export type SurfaceType =
+  | 'main'
+  | 'dashboard'
+  | 'cloud'
+  | 'hosting'
+  | 'docs'
+  | 'settings'
+  | 'login'
+  | 'signup'
+  | 'callback'
+  | 'privacy'
+  | 'terms'
+  | 'notfound';
 
 export interface UserProfile {
   id: string;
