@@ -17,7 +17,6 @@ import { AuthGate } from './components/auth/AuthGate';
 import { PrivacyPage } from './components/legal/PrivacyPage';
 import { TermsPage } from './components/legal/TermsPage';
 import { NotFoundPage } from './components/common/NotFoundPage';
-import { DomainSwitcher } from './components/common/DomainSwitcher';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 function MainApp() {
@@ -164,54 +163,7 @@ function MainApp() {
     path: string = '/',
     tab?: 'overview' | 'keys' | 'settings'
   ) => {
-    if (typeof window !== 'undefined') {
-      const host = window.location.hostname.toLowerCase();
-      const isProd = host === 'optic.doy.best' || host.endsWith('.optic.doy.best');
-
-      if (isProd) {
-        let targetOrigin = 'https://optic.doy.best';
-        let targetPath = path;
-
-        if (surface === 'cloud') {
-          targetOrigin = 'https://cloud.optic.doy.best';
-          targetPath = path === '/cloud' ? '/' : path;
-        } else if (surface === 'hosting') {
-          targetOrigin = 'https://hosting.optic.doy.best';
-          targetPath = path === '/hosting' ? '/' : path;
-        } else if (surface === 'docs') {
-          targetOrigin = 'https://docs.optic.doy.best';
-          targetPath = path === '/docs' ? '/' : path;
-        } else if (surface === 'api') {
-          targetOrigin = 'https://api.optic.doy.best';
-          targetPath = path === '/api' ? '/' : path;
-        } else if (surface === 'dashboard') {
-          targetOrigin = 'https://optic.doy.best';
-          targetPath =
-            tab === 'keys'
-              ? '/dashboard/keys'
-              : tab === 'settings'
-              ? '/dashboard/settings'
-              : '/dashboard';
-        } else if (surface === 'main') {
-          targetOrigin = 'https://optic.doy.best';
-          targetPath = '/';
-        } else if (surface === 'login') {
-          targetOrigin = 'https://optic.doy.best';
-          targetPath = '/login';
-        } else if (surface === 'signup') {
-          targetOrigin = 'https://optic.doy.best';
-          targetPath = '/signup';
-        }
-
-        const currentOrigin = window.location.origin;
-        if (targetOrigin !== currentOrigin) {
-          window.location.href = `${targetOrigin}${targetPath}`;
-          return;
-        }
-      }
-    }
-
-    // Localhost or same-origin navigation
+    // Perform instant client-side surface navigation
     setCurrentSurface(surface);
     setCurrentPath(path);
     if (tab) {
@@ -258,14 +210,6 @@ function MainApp() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col selection:bg-zinc-800 selection:text-white">
-      {/* Universal Surface Navigation & Domain Bar */}
-      <DomainSwitcher
-        currentSurface={currentSurface}
-        currentPath={currentPath}
-        onNavigate={handleNavigateSurface}
-        userEmail={user?.email}
-      />
-
       {/* Active Surface Router */}
       <div className="flex-1 flex flex-col">
         {currentSurface === 'main' && (
