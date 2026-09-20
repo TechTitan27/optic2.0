@@ -118,8 +118,16 @@ export default function RegisterCardSection({
 
   const handleRegister = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (!name) {
+      setAuthError("Please enter your name");
+      return;
+    }
     if (!email) {
       setAuthError("Please enter your email address");
+      return;
+    }
+    if (!password || password.length < 6) {
+      setAuthError("Please choose a password with at least 6 characters");
       return;
     }
     if (!terms) {
@@ -131,7 +139,7 @@ export default function RegisterCardSection({
 
     try {
       if (auth?.signUp) {
-        await auth.signUp(email, password || "demo12345");
+        await auth.signUp(email, password, name);
       }
       onSuccess?.();
     } catch (err: any) {
@@ -145,12 +153,24 @@ export default function RegisterCardSection({
     setAuthError(null);
     setLoading(true);
     try {
-      if (provider === "google" && auth?.signInWithGoogle) {
+      if (provider === "google") {
+        if (!auth?.signInWithGoogle) {
+          throw new Error("Google authentication handler is not initialized.");
+        }
         await auth.signInWithGoogle();
-      } else if (auth?.demoLogin) {
-        auth.demoLogin(provider === "google" ? "google-dev@optic.doy.best" : "github-dev@optic.doy.best");
+      } else {
+        const msg = "GitHub authentication is not enabled on this Supabase project. Please sign in with Google or your email credentials.";
+        setAuthError(msg);
+        if (typeof window !== "undefined") {
+          import("../../context/ToastContext").then(({ notifyToast }) => {
+            notifyToast({
+              type: "warning",
+              title: "Provider Unavailable",
+              message: msg,
+            });
+          });
+        }
       }
-      onSuccess?.();
     } catch (err: any) {
       setAuthError(err?.message || `Failed to sign up with ${provider}`);
     } finally {
@@ -265,7 +285,7 @@ export default function RegisterCardSection({
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Alex Rivera"
+                    placeholder="Ada Lovelace"
                     className="pl-10 bg-black border-zinc-800 text-zinc-100 placeholder:text-zinc-600 text-xs py-2 focus-visible:ring-zinc-700"
                   />
                 </div>

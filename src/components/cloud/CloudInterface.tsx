@@ -1,250 +1,318 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { SurfaceType, FileItem, FolderItem, UsageStats } from '../../types';
+import { OpticLogo } from '../brand/OpticLogo';
+import { OpticFooter } from '../common/OpticFooter';
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
-import { Modal } from '../common/Modal';
-import { Badge } from '../common/Badge';
 import { Card } from '../common/Card';
-import { OpticFooter } from '../common/OpticFooter';
-import { FileItem, FolderItem, SurfaceType } from '../../types';
+import { Badge } from '../common/Badge';
+import { Modal } from '../common/Modal';
 import { storageService } from '../../lib/storageService';
+import { supabaseData } from '../../lib/supabaseData';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 import {
-  HardDrive,
-  Folder,
-  FolderPlus,
   Upload,
+  ArrowLeft,
+  FolderPlus,
   Search,
-  ArrowUpDown,
-  MoreVertical,
-  Trash2,
-  Share2,
+  Folder,
   FileText,
   FileCode,
-  Image as ImageIcon,
   FileArchive,
+  Image as ImageIcon,
+  MoreVertical,
   Download,
-  Check,
+  Share2,
+  Trash2,
+  HardDrive,
   Copy,
+  Check,
   ChevronRight,
+  Database,
+  ExternalLink,
+  Edit2,
+  AlertCircle,
+  RefreshCw,
   Info,
-  Layers,
-  ArrowLeft,
 } from 'lucide-react';
-import { OpticLogo } from '../brand/OpticLogo';
 
 interface CloudInterfaceProps {
   onNavigateSurface: (surface: SurfaceType, path?: string) => void;
+  onOpenAuthModal?: () => void;
 }
 
-export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurface }) => {
-  const { user } = useAuth();
+export const CloudInterface: React.FC<CloudInterfaceProps> = ({
+  onNavigateSurface,
+  onOpenAuthModal,
+}) => {
+  const { user, profile } = useAuth();
+  const toast = useToast();
   const [files, setFiles] = useState<FileItem[]>([]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [currentFolder, setCurrentFolder] = useState<FolderItem | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'size' | 'updated'>('updated');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [loading, setLoading] = useState(true);
 
   // Modals
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [newFolderModalOpen, setNewFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [renameFolderModalOpen, setRenameFolderModalOpen] = useState(false);
+  const [folderToRename, setFolderToRename] = useState<FolderItem | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const [selectedFileForDetail, setSelectedFileForDetail] = useState<FileItem | null>(null);
   const [shareModalFile, setShareModalFile] = useState<FileItem | null>(null);
+  const [generatedShareUrl, setGeneratedShareUrl] = useState<string | null>(null);
+  const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
+  // Usage stats from database
+  const [usageStats, setUsageStats] = useState<UsageStats>({
+    storageUsedBytes: 0,
+    storageLimitBytes: 10 * 1024 * 1024 * 1024,
+    bandwidthUsedBytes: 0,
+    bandwidthLimitBytes: 50 * 1024 * 1024 * 1024,
+    deploymentsThisMonth: 1,
+    deploymentsLimit: 100,
+    apiRequestsThisMonth: 0,
+    apiRequestsLimit: 100000,
+  });
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Initial demo & API loading
-  useEffect(() => {
-    loadFiles();
-  }, [currentFolder]);
-
-  const loadFiles = async () => {
+  // Load files, folders, and usage for current folder from Supabase
+  const loadData = async () => {
     setLoading(true);
+    setErrorMessage(null);
     try {
-      const folderParam = currentFolder ? `?folderId=${currentFolder.id}` : '';
-      const res = await fetch(`/api/cloud/files${folderParam}`);
-      if (res.ok) {
-        const data = await res.json();
-        setFiles(data.files || []);
-        if (data.folders) setFolders(data.folders);
-      } else {
-        // Fallback realistic storage records
-        setInitialDemoData();
+      const userId = user?.id || '';
+      if (!userId) {
+        setFiles([]);
+        setFolders([]);
+        setLoading(false);
+        return;
       }
-    } catch {
-      setInitialDemoData();
+
+      const [dataRes, usageRes] = await Promise.all([
+        supabaseData.getFilesAndFolders(userId, currentFolder?.id || null),
+        supabaseData.getUserUsage(userId),
+      ]);
+
+      setFiles(dataRes.files);
+      setFolders(dataRes.folders);
+      if (usageRes) {
+        setUsageStats(usageRes);
+      }
+    } catch (err: any) {
+      console.warn('Failed to load cloud files from Supabase:', err);
+      setErrorMessage(err?.message || 'Could not fetch files from database');
     } finally {
       setLoading(false);
     }
   };
 
-  const setInitialDemoData = () => {
-    setFolders([
-      {
-        id: 'fold_assets',
-        name: 'brand-assets',
-        path: '/brand-assets',
-        itemCount: 4,
-        createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-      },
-      {
-        id: 'fold_builds',
-        name: 'release-artifacts',
-        path: '/release-artifacts',
-        itemCount: 2,
-        createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-      },
-    ]);
+  useEffect(() => {
+    loadData();
+  }, [user, currentFolder]);
 
-    setFiles([
-      {
-        id: 'f_1',
-        name: 'logo-optical.svg',
-        extension: 'SVG',
-        mimeType: 'image/svg+xml',
-        sizeBytes: 12288,
-        storageKey: 'assets/logo-optical.svg',
-        storageProvider: 'r2',
-        publicUrl: 'https://cdn.optic.doy.best/assets/logo-optical.svg',
-        createdAt: new Date(Date.now() - 120000).toISOString(),
-        updatedAt: new Date(Date.now() - 120000).toISOString(),
-        isPublic: true,
-      },
-      {
-        id: 'f_2',
-        name: 'website-bundle.zip',
-        extension: 'ZIP',
-        mimeType: 'application/zip',
-        sizeBytes: 4404019,
-        storageKey: 'builds/website-bundle.zip',
-        storageProvider: 'r2',
-        publicUrl: 'https://cdn.optic.doy.best/builds/website-bundle.zip',
-        createdAt: new Date(Date.now() - 3600000).toISOString(),
-        updatedAt: new Date(Date.now() - 3600000).toISOString(),
-        isPublic: false,
-      },
-      {
-        id: 'f_3',
-        name: 'datacenter-topology.png',
-        extension: 'PNG',
-        mimeType: 'image/png',
-        sizeBytes: 1887436,
-        storageKey: 'media/datacenter-topology.png',
-        storageProvider: 'r2',
-        publicUrl: 'https://cdn.optic.doy.best/media/datacenter-topology.png',
-        createdAt: new Date(Date.now() - 86400000).toISOString(),
-        updatedAt: new Date(Date.now() - 86400000).toISOString(),
-        isPublic: true,
-      },
-      {
-        id: 'f_4',
-        name: 'schema-dump.json',
-        extension: 'JSON',
-        mimeType: 'application/json',
-        sizeBytes: 94208,
-        storageKey: 'data/schema-dump.json',
-        storageProvider: 'r2',
-        publicUrl: 'https://cdn.optic.doy.best/data/schema-dump.json',
-        createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-        updatedAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-        isPublic: false,
-      },
-    ]);
-  };
-
-  // Upload handler
-  const handleUploadFiles = (selectedFiles: FileList | null) => {
+  // Upload handler with real storage adapter & Supabase metadata
+  const handleUploadFiles = async (selectedFiles: FileList | null) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
+    setUploadError(null);
+    setUploading(true);
 
-    const newUploadedFiles: FileItem[] = [];
-    Array.from(selectedFiles).forEach((file) => {
-      const meta = storageService.detectMimeType(file.name);
-      const newFile: FileItem = {
-        id: 'f_' + Math.random().toString(36).substring(2, 9),
-        name: file.name,
-        extension: meta.ext,
-        mimeType: meta.type,
-        sizeBytes: file.size,
-        storageKey: `uploads/${Date.now()}_${file.name}`,
-        storageProvider: 'r2',
-        publicUrl: `https://cdn.optic.doy.best/uploads/${file.name}`,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        isPublic: true,
-      };
-      newUploadedFiles.push(newFile);
-    });
+    const userId = user?.id || '';
+    if (!userId) {
+      setUploadError('You must be authenticated to upload files.');
+      setUploading(false);
+      return;
+    }
 
-    setFiles((prev) => [...newUploadedFiles, ...prev]);
-    setUploadModalOpen(false);
-  };
+    try {
+      for (const file of Array.from(selectedFiles)) {
+        const meta = storageService.detectMimeType(file.name);
+        // Call the isolated storage service
+        const uploadResult = await storageService.uploadFile(file, currentFolder?.path);
 
-  const handleCreateFolder = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFolderName.trim()) return;
+        if (!uploadResult.success) {
+          // Explicitly refuse to fake successful uploads
+          setUploadError(uploadResult.error || 'Failed to upload object bytes to storage provider.');
+          setUploading(false);
+          return;
+        }
 
-    const newFolder: FolderItem = {
-      id: 'fold_' + Math.random().toString(36).substring(2, 9),
-      name: newFolderName.trim(),
-      path: `/${newFolderName.trim()}`,
-      itemCount: 0,
-      createdAt: new Date().toISOString(),
-    };
+        // If upload succeeded, register file metadata in Supabase `files` table
+        await supabaseData.insertFileRecord(userId, {
+          name: file.name,
+          extension: meta.ext,
+          mimeType: meta.type,
+          sizeBytes: file.size,
+          folderId: currentFolder?.id || null,
+          storageKey: uploadResult.storageKey || `uploads/${file.name}`,
+          storageProvider: uploadResult.storageProvider || 'r2',
+          publicUrl: uploadResult.publicUrl || `https://cdn.optic.doy.best/uploads/${file.name}`,
+          isPublic: true,
+        });
+      }
 
-    setFolders((prev) => [...prev, newFolder]);
-    setNewFolderName('');
-    setNewFolderModalOpen(false);
-  };
-
-  const handleDeleteFile = (id: string) => {
-    if (!confirm('Are you sure you want to delete this file from Optic Cloud storage?')) return;
-    setFiles((prev) => prev.filter((f) => f.id !== id));
-    if (selectedFileForDetail?.id === id) setSelectedFileForDetail(null);
-  };
-
-  const getFileIcon = (extension: string) => {
-    switch (extension.toLowerCase()) {
-      case 'svg':
-      case 'png':
-      case 'jpg':
-      case 'jpeg':
-      case 'webp':
-        return <ImageIcon size={16} className="text-amber-400" />;
-      case 'zip':
-      case 'tar':
-      case 'gz':
-        return <FileArchive size={16} className="text-indigo-400" />;
-      case 'json':
-      case 'js':
-      case 'ts':
-      case 'html':
-      case 'css':
-        return <FileCode size={16} className="text-teal-400" />;
-      default:
-        return <FileText size={16} className="text-sky-400" />;
+      setUploadModalOpen(false);
+      await loadData();
+      toast.success('Files uploaded successfully to storage.', 'Upload Complete');
+    } catch (err: any) {
+      setUploadError(err?.message || 'Failed to upload file.');
+      toast.error(err?.message || 'Failed to upload file.', 'Upload Failed');
+    } finally {
+      setUploading(false);
     }
   };
 
-  // Filter & Sort
+  // Create folder
+  const handleCreateFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFolderName.trim()) return;
+
+    const userId = user?.id || '';
+    if (!userId) {
+      toast.error('Please sign in to create a folder.', 'Authentication Required');
+      return;
+    }
+
+    try {
+      await supabaseData.createFolder(
+        userId,
+        newFolderName.trim(),
+        currentFolder?.id || null,
+        currentFolder?.path || ''
+      );
+      toast.success(`Folder "${newFolderName.trim()}" created successfully.`, 'Folder Created');
+      setNewFolderName('');
+      setNewFolderModalOpen(false);
+      await loadData();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to create folder.', 'Folder Error');
+    }
+  };
+
+  // Rename folder
+  const handleRenameFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!folderToRename || !renameValue.trim()) return;
+
+    const userId = user?.id || '';
+    if (!userId) return;
+
+    try {
+      await supabaseData.renameFolder(userId, folderToRename.id, renameValue.trim());
+      toast.success('Folder renamed successfully.', 'Folder Renamed');
+      setRenameFolderModalOpen(false);
+      setFolderToRename(null);
+      setRenameValue('');
+      await loadData();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to rename folder.', 'Rename Error');
+    }
+  };
+
+  // Delete folder
+  const handleDeleteFolder = async (folder: FolderItem) => {
+    const userId = user?.id || '';
+    if (!userId) return;
+
+    try {
+      await supabaseData.deleteFolder(userId, folder.id);
+      toast.success(`Folder "${folder.name}" deleted.`, 'Folder Deleted');
+      if (currentFolder?.id === folder.id) {
+        setCurrentFolder(null);
+      } else {
+        await loadData();
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to delete folder.', 'Delete Error');
+    }
+  };
+
+  // Delete file
+  const handleDeleteFile = async (file: FileItem) => {
+    const userId = user?.id || '';
+    if (!userId) return;
+
+    try {
+      await supabaseData.deleteFile(userId, file.id, file.sizeBytes);
+      toast.success(`File "${file.name}" deleted.`, 'File Deleted');
+      setSelectedFileForDetail(null);
+      await loadData();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to delete file.', 'Delete Error');
+    }
+  };
+
+  // Generate real share link from `share_links` table
+  const handleOpenShareModal = async (file: FileItem) => {
+    setShareModalFile(file);
+    setCopiedLink(false);
+    setGeneratedShareUrl(file.publicUrl || null);
+
+    const userId = user?.id || '';
+    if (userId) {
+      try {
+        const link = await supabaseData.createShareLink(userId, file.id, 72);
+        setGeneratedShareUrl(link.shareUrl);
+        setShareExpiresAt(new Date(link.expiresAt).toLocaleDateString());
+      } catch (err) {
+        console.warn('Share link generation notice:', err);
+      }
+    }
+  };
+
+  // Sort & Filter
   const filteredFiles = files
     .filter((f) => f.name.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => {
-      let comp = 0;
-      if (sortBy === 'name') comp = a.name.localeCompare(b.name);
-      if (sortBy === 'size') comp = a.sizeBytes - b.sizeBytes;
-      if (sortBy === 'updated') comp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
-      return sortOrder === 'asc' ? comp : -comp;
+      if (sortBy === 'name') {
+        return sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+      }
+      if (sortBy === 'size') {
+        return sortOrder === 'asc' ? a.sizeBytes - b.sizeBytes : b.sizeBytes - a.sizeBytes;
+      }
+      if (sortBy === 'updated') {
+        return sortOrder === 'asc'
+          ? new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime()
+          : new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      }
+      return 0;
     });
 
-  const storageStatus = storageService.getStorageStatus();
+  const getFileIcon = (ext: string) => {
+    const e = ext.toUpperCase();
+    if (['PNG', 'JPG', 'JPEG', 'SVG', 'WEBP', 'GIF'].includes(e)) {
+      return <ImageIcon size={16} className="text-sky-400 shrink-0" />;
+    }
+    if (['ZIP', 'TAR', 'GZ', 'RAR'].includes(e)) {
+      return <FileArchive size={16} className="text-amber-400 shrink-0" />;
+    }
+    if (['TS', 'JS', 'JSON', 'HTML', 'CSS', 'PY', 'RS'].includes(e)) {
+      return <FileCode size={16} className="text-emerald-400 shrink-0" />;
+    }
+    return <FileText size={16} className="text-zinc-400 shrink-0" />;
+  };
+
+  const storageUsedGB = (usageStats.storageUsedBytes / (1024 * 1024 * 1024)).toFixed(2);
+  const storageLimitGB = (usageStats.storageLimitBytes / (1024 * 1024 * 1024)).toFixed(0);
+  const storagePercent = Math.min(
+    100,
+    Math.max(0, (usageStats.storageUsedBytes / usageStats.storageLimitBytes) * 100)
+  ).toFixed(1);
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-950 text-zinc-100 font-sans">
-      {/* Cloud Header */}
+    <div className="min-h-screen bg-black text-zinc-100 flex flex-col font-sans selection:bg-zinc-800 selection:text-white">
       <header className="h-14 border-b border-zinc-800/80 bg-zinc-950 px-4 sm:px-6 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
           <button
@@ -260,12 +328,13 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
           <Button
             size="sm"
             variant="outline"
             onClick={() => setNewFolderModalOpen(true)}
             icon={<FolderPlus size={14} />}
+            className="text-xs"
           >
             New Folder
           </Button>
@@ -274,29 +343,114 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
             variant="primary"
             onClick={() => setUploadModalOpen(true)}
             icon={<Upload size={14} />}
+            className="text-xs"
           >
-            Upload
+            Upload File
           </Button>
         </div>
       </header>
 
-      {/* Main Body */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6">
-        {/* Storage Architecture Callout */}
-        <div className="p-3.5 rounded-xl border border-zinc-800/80 bg-zinc-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2.5">
-            <HardDrive size={16} className="text-sky-400 shrink-0" />
-            <span className="text-zinc-300">
-              <strong className="text-zinc-100 font-semibold">Decoupled Object Storage:</strong> File metadata is tracked in Supabase PostgreSQL, while bytes interface with Cloudflare R2 signed upload URLs.
-            </span>
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+        {/* Top Title & Primary Actions */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-900">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-mono text-sky-400 mb-1">
+              <Database size={13} />
+              <span>SUPABASE SCHEMA: files • folders • share_links • usage</span>
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+              Cloud Storage Manager
+            </h1>
+            <p className="text-xs text-zinc-400 mt-1">
+              Store and manage object files, folders, and authenticated share links.
+            </p>
           </div>
-          <div className="flex items-center gap-3 font-mono text-[11px] text-zinc-400 shrink-0">
-            <Badge variant="info">Storage: 7.2 GB / 10 GB</Badge>
+
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setNewFolderModalOpen(true)}
+              icon={<FolderPlus size={14} />}
+              className="text-xs"
+            >
+              New Folder
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => setUploadModalOpen(true)}
+              icon={<Upload size={14} />}
+              className="text-xs"
+            >
+              Upload File
+            </Button>
           </div>
         </div>
 
-        {/* Toolbar: Breadcrumbs, Search, Sorting */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Database Usage Meter & Storage Provider Banner */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
+                Storage Allocation
+              </span>
+              <span className="text-[10px] font-mono text-sky-400">table: usage</span>
+            </div>
+            <div className="text-lg font-bold text-white tracking-tight">
+              {storageUsedGB} GB <span className="text-xs font-normal text-zinc-500">/ {storageLimitGB} GB</span>
+            </div>
+            <div className="mt-2.5 w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+              <div
+                className="bg-sky-500 h-full rounded-full transition-all duration-300"
+                style={{ width: `${storagePercent}%` }}
+              />
+            </div>
+            <div className="text-[10px] text-zinc-500 mt-2 font-mono flex justify-between">
+              <span>{storagePercent}% used</span>
+              <span>{files.length} active files</span>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 col-span-2 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
+                  Storage Backend Status
+                </span>
+                <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded">
+                  Modular Adapter
+                </span>
+              </div>
+              <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
+                Supabase database tables (<code className="text-sky-300">files</code>,{' '}
+                <code className="text-sky-300">folders</code>, <code className="text-sky-300">usage</code>,{' '}
+                <code className="text-sky-300">share_links</code>) are live. Object binary storage is wired through
+                the isolated storage adapter ready for Cloudflare R2 or Supabase Storage.
+              </p>
+            </div>
+            <div className="mt-3 flex items-center gap-2 text-[11px] font-mono text-zinc-500">
+              <Info size={12} className="text-sky-400 shrink-0" />
+              <span>RLS enforces data isolation so you only access your own files.</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Error message alert if query failed */}
+        {errorMessage && (
+          <div className="p-4 rounded-xl border border-red-900/60 bg-red-950/30 text-red-300 flex items-center justify-between text-xs font-mono">
+            <div className="flex items-center gap-2.5">
+              <AlertCircle size={16} className="text-red-400 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+            <Button size="sm" variant="outline" onClick={loadData} icon={<RefreshCw size={13} />}>
+              Retry
+            </Button>
+          </div>
+        )}
+
+        {/* Navigation Breadcrumb Bar & Search */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl border border-zinc-800/80 bg-zinc-900/40">
           {/* Breadcrumbs */}
           <div className="flex items-center gap-1.5 text-xs font-mono text-zinc-400">
             <button
@@ -310,7 +464,10 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
             {currentFolder && (
               <>
                 <ChevronRight size={13} className="text-zinc-600" />
-                <span className="text-white font-semibold">{currentFolder.name}</span>
+                <span className="text-white font-semibold flex items-center gap-1.5">
+                  <Folder size={13} className="text-sky-400" />
+                  {currentFolder.name}
+                </span>
               </>
             )}
           </div>
@@ -380,29 +537,52 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
           </div>
         </div>
 
-        {/* Folder Tiles (if in root) */}
-        {!currentFolder && folders.length > 0 && (
+        {/* Folders List (if any exist in current level) */}
+        {folders.length > 0 && (
           <div className="space-y-2">
             <span className="text-[11px] font-mono text-zinc-500 uppercase tracking-wider font-semibold">
-              Folders
+              Folders ({folders.length})
             </span>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
               {folders.map((folder) => (
-                <button
+                <div
                   key={folder.id}
-                  onClick={() => setCurrentFolder(folder)}
                   className="p-3.5 rounded-xl border border-zinc-800/80 bg-zinc-900/60 hover:bg-zinc-900 hover:border-zinc-700/80 text-left transition-all flex items-center justify-between group"
                 >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <Folder size={18} className="text-sky-400 group-hover:scale-105 transition-transform" />
+                  <button
+                    onClick={() => setCurrentFolder(folder)}
+                    className="flex items-center gap-2.5 min-w-0 flex-1 text-left"
+                  >
+                    <Folder size={18} className="text-sky-400 group-hover:scale-105 transition-transform shrink-0" />
                     <span className="text-xs font-semibold text-zinc-200 truncate group-hover:text-white">
                       {folder.name}
                     </span>
+                  </button>
+                  <div className="flex items-center gap-1 shrink-0 opacity-80 group-hover:opacity-100">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFolderToRename(folder);
+                        setRenameValue(folder.name);
+                        setRenameFolderModalOpen(true);
+                      }}
+                      className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200"
+                      title="Rename folder"
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteFolder(folder);
+                      }}
+                      className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-red-400"
+                      title="Delete folder"
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
-                  <span className="text-[11px] font-mono text-zinc-500">
-                    {folder.itemCount} items
-                  </span>
-                </button>
+                </div>
               ))}
             </div>
           </div>
@@ -411,32 +591,49 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
         {/* Files Data Table */}
         <div className="space-y-2">
           <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500 uppercase tracking-wider font-semibold">
-            <span>Files ({filteredFiles.length})</span>
+            <span>
+              Files ({filteredFiles.length})
+              {currentFolder ? ` in /${currentFolder.name}` : ' in /root'}
+            </span>
           </div>
 
           <Card className="overflow-hidden">
             {loading ? (
-              <div className="p-12 text-center text-xs text-zinc-500 font-mono">
-                Loading files from Supabase storage metadata...
+              <div className="p-12 text-center text-xs text-zinc-500 font-mono flex flex-col items-center gap-3">
+                <div className="w-5 h-5 border-2 border-zinc-700 border-t-sky-400 rounded-full animate-spin" />
+                <span>Loading files from Supabase database...</span>
               </div>
-            ) : filteredFiles.length === 0 ? (
+            ) : filteredFiles.length === 0 && folders.length === 0 ? (
               <div className="p-16 text-center flex flex-col items-center gap-3">
                 <div className="w-12 h-12 rounded-xl bg-zinc-800 border border-zinc-700/60 flex items-center justify-center text-zinc-400">
                   <HardDrive size={22} />
                 </div>
-                <h3 className="text-sm font-semibold text-zinc-200">No files yet</h3>
+                <h3 className="text-sm font-semibold text-zinc-200">No files or folders</h3>
                 <p className="text-xs text-zinc-400 max-w-sm">
-                  Upload your first file to get started with developer cloud storage.
+                  This directory is empty. Create a folder or upload a file using the actions above.
                 </p>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => setUploadModalOpen(true)}
-                  icon={<Upload size={14} />}
-                  className="mt-2"
-                >
-                  Upload File
-                </Button>
+                <div className="flex items-center gap-2 mt-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setNewFolderModalOpen(true)}
+                    icon={<FolderPlus size={14} />}
+                  >
+                    New Folder
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => setUploadModalOpen(true)}
+                    icon={<Upload size={14} />}
+                  >
+                    Upload File
+                  </Button>
+                </div>
+              </div>
+            ) : filteredFiles.length === 0 ? (
+              <div className="p-12 text-center text-xs text-zinc-500 font-mono">
+                No files in this folder. Folders are listed above.
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -477,14 +674,14 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
                         <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
                             <button
-                              onClick={() => setShareModalFile(file)}
+                              onClick={() => handleOpenShareModal(file)}
                               className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200"
                               title="Share file"
                             >
                               <Share2 size={14} />
                             </button>
                             <button
-                              onClick={() => handleDeleteFile(file.id)}
+                              onClick={() => handleDeleteFile(file)}
                               className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-red-400"
                               title="Delete file"
                             >
@@ -504,12 +701,17 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
 
       <OpticFooter onNavigateSurface={onNavigateSurface} compact={true} />
 
-      {/* Upload Modal (Drag & Drop + Click) */}
+      {/* Upload Modal (Drag & Drop + Click + Error Handling) */}
       <Modal
         isOpen={uploadModalOpen}
-        onClose={() => setUploadModalOpen(false)}
+        onClose={() => {
+          if (!uploading) {
+            setUploadModalOpen(false);
+            setUploadError(null);
+          }
+        }}
         title="Upload to Optic Cloud"
-        description="Select files to upload directly to object storage with Supabase metadata registration."
+        description="Upload files directly to object storage with Supabase metadata registration."
       >
         <div className="space-y-4">
           <input
@@ -518,31 +720,49 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
             ref={fileInputRef}
             onChange={(e) => handleUploadFiles(e.target.files)}
             className="hidden"
+            disabled={uploading}
           />
+
+          {uploadError && (
+            <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/80 text-red-300 text-xs font-mono leading-relaxed">
+              <div className="flex items-center gap-1.5 font-semibold mb-1 text-red-200">
+                <AlertCircle size={14} />
+                <span>Storage Adapter Notice</span>
+              </div>
+              {uploadError}
+            </div>
+          )}
 
           <div
             onDragOver={(e) => {
               e.preventDefault();
-              setDragActive(true);
+              if (!uploading) setDragActive(true);
             }}
             onDragLeave={() => setDragActive(false)}
             onDrop={(e) => {
               e.preventDefault();
               setDragActive(false);
-              handleUploadFiles(e.dataTransfer.files);
+              if (!uploading) handleUploadFiles(e.dataTransfer.files);
             }}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => {
+              if (!uploading) fileInputRef.current?.click();
+            }}
             className={`p-8 border-2 border-dashed rounded-xl text-center cursor-pointer transition-colors ${
               dragActive
                 ? 'border-sky-500 bg-sky-500/10'
                 : 'border-zinc-800 hover:border-zinc-700 bg-zinc-950/60'
-            }`}
+            } ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-sky-400 mx-auto mb-3">
-              <Upload size={18} />
+              {uploading ? (
+                <div className="w-5 h-5 border-2 border-sky-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Upload size={18} />
+              )}
             </div>
             <p className="text-xs font-semibold text-zinc-200">
-              Drop files here, or <span className="text-sky-400 underline">browse</span>
+              {uploading ? 'Processing upload...' : 'Drop files here, or '}
+              {!uploading && <span className="text-sky-400 underline">browse</span>}
             </p>
             <p className="text-[11px] text-zinc-500 mt-1">
               Supports any file type up to 5 GB.
@@ -550,7 +770,10 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
           </div>
 
           <div className="text-[10px] text-zinc-500 font-mono bg-zinc-950 p-2.5 rounded-lg border border-zinc-800/80">
-            Target Destination: <span className="text-zinc-300">{currentFolder ? currentFolder.path : '/root'}</span>
+            Target Destination:{' '}
+            <span className="text-zinc-300">
+              {currentFolder ? currentFolder.path : '/root'}
+            </span>
           </div>
         </div>
       </Modal>
@@ -560,6 +783,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
         isOpen={newFolderModalOpen}
         onClose={() => setNewFolderModalOpen(false)}
         title="Create New Folder"
+        description="Creates a folder entry in Supabase database."
       >
         <form onSubmit={handleCreateFolder} className="space-y-4">
           <Input
@@ -585,13 +809,43 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
         </form>
       </Modal>
 
+      {/* Rename Folder Modal */}
+      <Modal
+        isOpen={renameFolderModalOpen}
+        onClose={() => setRenameFolderModalOpen(false)}
+        title="Rename Folder"
+        description="Updates folder record in Supabase database."
+      >
+        <form onSubmit={handleRenameFolder} className="space-y-4">
+          <Input
+            label="Folder Name"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            required
+            autoFocus
+          />
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setRenameFolderModalOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary">
+              Save Changes
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
       {/* File Detail / Metadata Modal */}
       {selectedFileForDetail && (
         <Modal
           isOpen={Boolean(selectedFileForDetail)}
           onClose={() => setSelectedFileForDetail(null)}
           title={selectedFileForDetail.name}
-          description="File metadata from Supabase database record"
+          description="File metadata synced from Supabase files table"
         >
           <div className="space-y-3 font-mono text-xs">
             <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
@@ -600,26 +854,32 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
             </div>
             <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
               <span className="text-zinc-500">SIZE:</span>
-              <span className="text-zinc-200">{storageService.formatBytes(selectedFileForDetail.sizeBytes)} ({selectedFileForDetail.sizeBytes.toLocaleString()} bytes)</span>
+              <span className="text-zinc-200">
+                {storageService.formatBytes(selectedFileForDetail.sizeBytes)} ({selectedFileForDetail.sizeBytes.toLocaleString()} bytes)
+              </span>
             </div>
             <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
               <span className="text-zinc-500">STORAGE KEY:</span>
-              <span className="text-zinc-300 text-[11px] truncate max-w-[200px]">{selectedFileForDetail.storageKey}</span>
+              <span className="text-zinc-300 text-[11px] truncate max-w-[200px]">
+                {selectedFileForDetail.storageKey}
+              </span>
             </div>
             <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
-              <span className="text-zinc-500">ENGINE:</span>
-              <span className="text-sky-400">Cloudflare R2 Adapter</span>
+              <span className="text-zinc-500">PROVIDER:</span>
+              <span className="text-sky-400 capitalize">{selectedFileForDetail.storageProvider || 'r2'}</span>
             </div>
             <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
               <span className="text-zinc-500">CREATED:</span>
-              <span className="text-zinc-400">{new Date(selectedFileForDetail.createdAt).toLocaleString()}</span>
+              <span className="text-zinc-400">
+                {new Date(selectedFileForDetail.createdAt).toLocaleString()}
+              </span>
             </div>
 
             <div className="flex justify-between items-center pt-3 border-t border-zinc-800">
               <Button
                 size="sm"
                 variant="danger"
-                onClick={() => handleDeleteFile(selectedFileForDetail.id)}
+                onClick={() => handleDeleteFile(selectedFileForDetail)}
                 icon={<Trash2 size={13} />}
               >
                 Delete File
@@ -628,8 +888,9 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
                 size="sm"
                 variant="primary"
                 onClick={() => {
-                  setShareModalFile(selectedFileForDetail);
+                  const file = selectedFileForDetail;
                   setSelectedFileForDetail(null);
+                  handleOpenShareModal(file);
                 }}
                 icon={<Share2 size={13} />}
               >
@@ -640,7 +901,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
         </Modal>
       )}
 
-      {/* Share Link Modal */}
+      {/* Share Link Modal with table share_links */}
       {shareModalFile && (
         <Modal
           isOpen={Boolean(shareModalFile)}
@@ -649,18 +910,22 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
             setCopiedLink(false);
           }}
           title="Share File Link"
-          description="Direct CDN link with public read authorization"
+          description="Managed via Supabase share_links table"
         >
           <div className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-xs text-zinc-400 font-medium">Public URL</label>
               <div className="flex items-center gap-2 p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-xs text-zinc-200">
-                <span className="truncate flex-1 select-all">{shareModalFile.publicUrl}</span>
+                <span className="truncate flex-1 select-all">
+                  {generatedShareUrl || shareModalFile.publicUrl || 'Generating link...'}
+                </span>
                 <button
                   onClick={async () => {
-                    if (shareModalFile.publicUrl) {
-                      await navigator.clipboard.writeText(shareModalFile.publicUrl);
+                    const url = generatedShareUrl || shareModalFile.publicUrl;
+                    if (url) {
+                      await navigator.clipboard.writeText(url);
                       setCopiedLink(true);
+                      toast.success('CDN share link copied to clipboard.', 'Copied');
                       setTimeout(() => setCopiedLink(false), 2000);
                     }
                   }}
@@ -672,8 +937,14 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({ onNavigateSurfac
               </div>
             </div>
 
+            {shareExpiresAt && (
+              <div className="text-[11px] text-zinc-500 font-mono">
+                Access expires on: <span className="text-zinc-300">{shareExpiresAt}</span>
+              </div>
+            )}
+
             <div className="text-[11px] text-zinc-400 leading-relaxed bg-zinc-950 p-3 rounded-lg border border-zinc-800">
-              Anyone with this link can access the raw bytes via Optic CDN edge nodes without authentication.
+              Anyone with this link can access the raw bytes via Optic edge nodes without authentication.
             </div>
 
             <Button

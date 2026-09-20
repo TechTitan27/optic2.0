@@ -7,6 +7,8 @@ import { Modal } from '../common/Modal';
 import { CodeBlock } from '../common/CodeBlock';
 import { OpticFooter } from '../common/OpticFooter';
 import { HostingProject, DeploymentItem, DeploymentLog, DomainItem, SurfaceType } from '../../types';
+import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 import {
   Server,
   Plus,
@@ -33,6 +35,10 @@ interface HostingInterfaceProps {
 }
 
 export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSurface }) => {
+  const { user, profile } = useAuth();
+  const toast = useToast();
+  const activeCreator = profile?.fullName || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'developer';
+
   // State: projects list
   const [projects, setProjects] = useState<HostingProject[]>([
     {
@@ -42,8 +48,8 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
       framework: 'react',
       productionDomain: 'https://my-portfolio.optic.doy.best',
       assignedSubdomain: 'my-portfolio.optic.doy.best',
-      customDomains: ['portfolio.alexrivera.dev'],
-      gitRepo: 'alexrivera/portfolio',
+      customDomains: ['portfolio.devsite.me'],
+      gitRepo: 'optic-developer/portfolio',
       gitBranch: 'main',
       status: 'ready',
       latestDeployment: {
@@ -54,7 +60,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
         url: 'https://my-portfolio.optic.doy.best',
         commitHash: '9fa4c10',
         commitMessage: 'feat: add developer infrastructure case studies',
-        creator: 'alex.developer',
+        creator: 'optic.dev',
         branch: 'main',
         durationSeconds: 14,
         environment: 'production',
@@ -71,7 +77,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
       productionDomain: 'https://example-site.optic.doy.best',
       assignedSubdomain: 'example-site.optic.doy.best',
       customDomains: [],
-      gitRepo: 'alexrivera/example-site',
+      gitRepo: 'optic-developer/example-site',
       gitBranch: 'preview',
       status: 'ready',
       latestDeployment: {
@@ -82,7 +88,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
         url: 'https://example-site.optic.doy.best',
         commitHash: '8b31ea9',
         commitMessage: 'fix: align navbar spacing for mobile',
-        creator: 'alex.developer',
+        creator: 'optic.dev',
         branch: 'preview',
         durationSeconds: 9,
         environment: 'preview',
@@ -111,7 +117,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
     {
       id: 'dom_1',
       projectId: 'proj_1',
-      domain: 'portfolio.alexrivera.dev',
+      domain: 'portfolio.devsite.me',
       status: 'verified',
       dnsType: 'CNAME',
       dnsTarget: 'cname.optic.doy.best',
@@ -130,7 +136,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
       url: 'https://my-portfolio.optic.doy.best',
       commitHash: '9fa4c10',
       commitMessage: 'feat: add developer infrastructure case studies',
-      creator: 'alex.developer',
+      creator: 'optic.dev',
       branch: 'main',
       durationSeconds: 14,
       environment: 'production',
@@ -144,7 +150,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
       url: 'https://dep-100-my-portfolio.optic.doy.best',
       commitHash: '3c19f2a',
       commitMessage: 'chore: configure tailwind typography',
-      creator: 'alex.developer',
+      creator: 'optic.dev',
       branch: 'main',
       durationSeconds: 18,
       environment: 'preview',
@@ -155,7 +161,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
   // Deployment Logs
   const [logs, setLogs] = useState<DeploymentLog[]>([
     { id: 'l1', deploymentId: 'dep_101', timestamp: '14:02:01.120', level: 'info', message: 'Received deployment request from CLI token [opt_live_...]' },
-    { id: 'l2', deploymentId: 'dep_101', timestamp: '14:02:02.040', level: 'info', message: 'Cloning repository alexrivera/portfolio (commit 9fa4c10)...' },
+    { id: 'l2', deploymentId: 'dep_101', timestamp: '14:02:02.040', level: 'info', message: 'Cloning repository optic-developer/portfolio (commit 9fa4c10)...' },
     { id: 'l3', deploymentId: 'dep_101', timestamp: '14:02:04.190', level: 'info', message: 'Running build command: npm run build' },
     { id: 'l4', deploymentId: 'dep_101', timestamp: '14:02:11.830', level: 'info', message: 'Dist directory generated: 28 static files (1.4 MB total)' },
     { id: 'l5', deploymentId: 'dep_101', timestamp: '14:02:13.200', level: 'info', message: 'Uploading assets to Optic Edge CDN...' },
@@ -186,7 +192,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
         url: `https://${slug}.optic.doy.best`,
         commitHash: 'init01',
         commitMessage: 'Initial site deployment',
-        creator: 'alex.developer',
+        creator: activeCreator,
         branch: 'main',
         durationSeconds: 11,
         environment: 'production',
@@ -201,6 +207,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
     setCreatingProject(false);
     setCreateProjectModalOpen(false);
     setSelectedProject(newProj);
+    toast.success(`Project "${newProj.name}" created successfully.`, 'Hosting Project Ready');
   };
 
   const handleTriggerDeploy = () => {
@@ -216,7 +223,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
         url: selectedProject.productionDomain,
         commitHash: Math.random().toString(16).substring(2, 9),
         commitMessage: 'manual: trigger new production build',
-        creator: 'alex.developer',
+        creator: activeCreator,
         branch: selectedProject.gitBranch || 'main',
         durationSeconds: 12,
         environment: 'production',
@@ -230,6 +237,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
         updatedAt: new Date().toISOString(),
       });
       setTriggerDeploying(false);
+      toast.success('Production build deployed to Edge CDN successfully.', 'Deployment Live');
     }, 1200);
   };
 
@@ -250,6 +258,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
 
     setProjectDomains([...projectDomains, newDom]);
     setCustomDomainInput('');
+    toast.success(`Domain "${newDom.domain}" added. DNS verification initiated.`, 'Domain Added');
   };
 
   return (

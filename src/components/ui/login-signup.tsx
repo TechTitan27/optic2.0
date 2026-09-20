@@ -120,12 +120,16 @@ export default function LoginCardSection({
       setAuthError("Please enter your email address");
       return;
     }
+    if (!password) {
+      setAuthError("Please enter your account password");
+      return;
+    }
     setAuthError(null);
     setLoading(true);
 
     try {
       if (auth?.signIn) {
-        await auth.signIn(email, password || "demo12345");
+        await auth.signIn(email, password);
       }
       onSuccess?.();
     } catch (err: any) {
@@ -139,12 +143,24 @@ export default function LoginCardSection({
     setAuthError(null);
     setLoading(true);
     try {
-      if (provider === "google" && auth?.signInWithGoogle) {
+      if (provider === "google") {
+        if (!auth?.signInWithGoogle) {
+          throw new Error("Google authentication handler is not initialized.");
+        }
         await auth.signInWithGoogle();
-      } else if (auth?.demoLogin) {
-        auth.demoLogin(provider === "google" ? "google-dev@optic.doy.best" : "github-dev@optic.doy.best");
+      } else {
+        const msg = "GitHub authentication is not enabled on this Supabase project. Please sign in with Google or your email credentials.";
+        setAuthError(msg);
+        if (typeof window !== "undefined") {
+          import("../../context/ToastContext").then(({ notifyToast }) => {
+            notifyToast({
+              type: "warning",
+              title: "Provider Unavailable",
+              message: msg,
+            });
+          });
+        }
       }
-      onSuccess?.();
     } catch (err: any) {
       setAuthError(err?.message || `Failed to sign in with ${provider}`);
     } finally {

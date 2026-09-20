@@ -18,7 +18,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({
   onOpenAuth,
   onGoHome,
 }) => {
-  const { user, loading, demoLogin } = useAuth();
+  const { user, loading } = useAuth();
 
   if (loading) {
     return (
@@ -65,14 +65,6 @@ export const AuthGate: React.FC<AuthGateProps> = ({
                 icon={<Lock size={14} />}
               >
                 Sign In with Supabase
-              </Button>
-
-              <Button
-                variant="secondary"
-                className="w-full"
-                onClick={() => demoLogin()}
-              >
-                Continue with Demo Developer Session
               </Button>
 
               <Button

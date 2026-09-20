@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { ToastProvider } from './context/ToastContext';
 import { SurfaceType } from './types';
 import { LandingPage } from './components/landing/LandingPage';
 import { DashboardLayout } from './components/dashboard/DashboardLayout';
@@ -183,11 +184,13 @@ function MainApp() {
 export default function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider>
-        <AuthProvider>
-          <MainApp />
-        </AuthProvider>
-      </ThemeProvider>
+      <ToastProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <MainApp />
+          </AuthProvider>
+        </ThemeProvider>
+      </ToastProvider>
     </ErrorBoundary>
   );
 }

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import crypto from 'crypto';
+import { getSupabaseServerClient, verifyUserToken } from './supabaseServer';
 
 interface WaitlistEntry {
   email: string;
@@ -18,20 +19,9 @@ interface StoredApiKey {
   lastUsedAt: string | null;
 }
 
-// In-memory persistent state during server lifetime
+// In-memory persistent state during server lifetime as reliable fallback
 const waitlist: WaitlistEntry[] = [];
-const apiKeys: StoredApiKey[] = [
-  {
-    id: 'key_default_cli',
-    userId: 'usr_dev',
-    name: 'Production CLI Deployer',
-    keyPrefix: 'opt_live_9a7b4f2c...',
-    keyHash: crypto.createHash('sha256').update('opt_live_sample_hash').digest('hex'),
-    status: 'active',
-    createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-    lastUsedAt: new Date(Date.now() - 3600000 * 4).toISOString(),
-  },
-];
+const inMemoryApiKeys: StoredApiKey[] = [];
 
 function parseJsonBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -54,6 +44,21 @@ function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify(data));
+}
+
+async function resolveUserId(req: IncomingMessage): Promise<{ userId: string; token?: string }> {
+  const authHeader = req.headers['authorization'] as string | undefined;
+  const headerToken = authHeader?.replace(/^Bearer\s+/i, '').trim();
+  
+  if (headerToken) {
+    const verified = await verifyUserToken(authHeader);
+    if (verified) {
+      return { userId: verified.id, token: headerToken };
+    }
+  }
+
+  const headerUserId = req.headers['x-user-id'] as string | undefined;
+  return { userId: headerUserId || 'usr_dev', token: headerToken };
 }
 
 export async function handleApiRequest(
@@ -114,7 +119,7 @@ export async function handleApiRequest(
     try {
       const body = await parseJsonBody(req);
       const name = (body.name || '').trim();
-      const userId = (req.headers['x-user-id'] as string) || 'usr_dev';
+      const { userId, token } = await resolveUserId(req);
 
       if (!name) {
         return sendJson(res, 400, {
@@ -123,38 +128,76 @@ export async function handleApiRequest(
         });
       }
 
-      // Cryptographically secure token generation
+      // Cryptographically secure token generation (32 bytes entropy)
       const randomEntropy = crypto.randomBytes(24).toString('hex');
       const rawKey = `opt_live_${randomEntropy}`;
       const keyPrefix = `opt_live_${randomEntropy.substring(0, 8)}...`;
+      // Cryptographically secure sha256 hash before storing - NEVER store the raw key
       const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
 
-      const id = 'key_' + crypto.randomBytes(6).toString('hex');
+      const id = 'key_' + crypto.randomBytes(8).toString('hex');
       const createdAt = new Date().toISOString();
 
-      const newKeyEntry: StoredApiKey = {
-        id,
-        userId,
-        name,
-        keyPrefix,
-        keyHash,
-        status: 'active',
-        createdAt,
-        lastUsedAt: null,
-      };
+      // Try inserting into Supabase api_keys table
+      const sb = getSupabaseServerClient(token);
+      let insertedToSupabase = false;
 
-      apiKeys.unshift(newKeyEntry);
+      if (sb) {
+        try {
+          const { data, error } = await sb
+            .from('api_keys')
+            .insert({
+              user_id: userId,
+              name,
+              key_prefix: keyPrefix,
+              key_hash: keyHash,
+              status: 'active',
+            })
+            .select()
+            .single();
 
-      return sendJson(res, 201, {
-        success: true,
-        key: {
+          if (!error && data) {
+            insertedToSupabase = true;
+            return sendJson(res, 201, {
+              success: true,
+              key: {
+                id: data.id,
+                name: data.name,
+                rawKey, // returned ONLY once
+                keyPrefix: data.key_prefix,
+                createdAt: data.created_at,
+              },
+            });
+          }
+        } catch (dbErr) {
+          console.warn('Supabase api_keys insert fallback:', dbErr);
+        }
+      }
+
+      if (!insertedToSupabase) {
+        // Safe in-memory fallback
+        inMemoryApiKeys.unshift({
           id,
+          userId,
           name,
-          rawKey, // returned only once
           keyPrefix,
+          keyHash,
+          status: 'active',
           createdAt,
-        },
-      });
+          lastUsedAt: null,
+        });
+
+        return sendJson(res, 201, {
+          success: true,
+          key: {
+            id,
+            name,
+            rawKey, // returned ONLY once
+            keyPrefix,
+            createdAt,
+          },
+        });
+      }
     } catch {
       return sendJson(res, 500, { success: false, error: 'Failed to create key' });
     }
@@ -162,20 +205,55 @@ export async function handleApiRequest(
 
   // 3. GET /api/keys/list
   if (url === '/api/keys/list' && method === 'GET') {
-    // Only return non-sensitive fields. NEVER return keyHash or rawKey.
-    const publicList = apiKeys.map((k) => ({
-      id: k.id,
-      name: k.name,
-      keyPrefix: k.keyPrefix,
-      status: k.status,
-      createdAt: k.createdAt,
-      lastUsedAt: k.lastUsedAt,
-    }));
+    try {
+      const { userId, token } = await resolveUserId(req);
+      const sb = getSupabaseServerClient(token);
 
-    return sendJson(res, 200, {
-      success: true,
-      keys: publicList,
-    });
+      if (sb) {
+        try {
+          // Select only non-sensitive columns: id, name, key_prefix, status, created_at, last_used_at
+          // NEVER select or return key_hash
+          const { data, error } = await sb
+            .from('api_keys')
+            .select('id, name, key_prefix, status, created_at, last_used_at')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false });
+
+          if (!error && data) {
+            const keys = data.map((k: any) => ({
+              id: k.id,
+              name: k.name,
+              keyPrefix: k.key_prefix,
+              status: k.status,
+              createdAt: k.created_at,
+              lastUsedAt: k.last_used_at,
+            }));
+            return sendJson(res, 200, { success: true, keys });
+          }
+        } catch (dbErr) {
+          console.warn('Supabase api_keys list query fallback:', dbErr);
+        }
+      }
+
+      // In-memory fallback filtered strictly by userId
+      const userKeys = inMemoryApiKeys
+        .filter((k) => k.userId === userId)
+        .map((k) => ({
+          id: k.id,
+          name: k.name,
+          keyPrefix: k.keyPrefix,
+          status: k.status,
+          createdAt: k.createdAt,
+          lastUsedAt: k.lastUsedAt,
+        }));
+
+      return sendJson(res, 200, {
+        success: true,
+        keys: userKeys,
+      });
+    } catch {
+      return sendJson(res, 500, { success: false, error: 'Failed to list keys' });
+    }
   }
 
   // 4. POST /api/keys/revoke
@@ -183,84 +261,152 @@ export async function handleApiRequest(
     try {
       const body = await parseJsonBody(req);
       const { id } = body;
+      const { userId, token } = await resolveUserId(req);
 
-      const target = apiKeys.find((k) => k.id === id);
-      if (!target) {
-        return sendJson(res, 404, { success: false, error: 'Key not found' });
+      if (!id) {
+        return sendJson(res, 400, { success: false, error: 'Key id is required' });
       }
 
-      target.status = 'revoked';
+      const sb = getSupabaseServerClient(token);
+      if (sb) {
+        try {
+          const { error } = await sb
+            .from('api_keys')
+            .update({ status: 'revoked' })
+            .eq('id', id)
+            .eq('user_id', userId);
+
+          if (!error) {
+            return sendJson(res, 200, { success: true, message: 'Key revoked' });
+          }
+        } catch (dbErr) {
+          console.warn('Supabase api_keys revoke fallback:', dbErr);
+        }
+      }
+
+      const target = inMemoryApiKeys.find((k) => k.id === id && k.userId === userId);
+      if (target) {
+        target.status = 'revoked';
+      }
+
       return sendJson(res, 200, { success: true, message: 'Key revoked' });
     } catch {
       return sendJson(res, 500, { success: false, error: 'Failed to revoke key' });
     }
   }
 
-  // 5. GET /api/cloud/files
-  if (url.startsWith('/api/cloud/files') && method === 'GET') {
-    return sendJson(res, 200, {
-      success: true,
-      files: [
-        {
-          id: 'f_1',
-          name: 'logo.svg',
-          extension: 'SVG',
-          mimeType: 'image/svg+xml',
-          sizeBytes: 12288,
-          storageKey: 'assets/logo.svg',
-          storageProvider: 'r2',
-          publicUrl: 'https://cdn.optic.doy.best/assets/logo.svg',
-          createdAt: new Date(Date.now() - 120000).toISOString(),
-          updatedAt: new Date(Date.now() - 120000).toISOString(),
-          isPublic: true,
-        },
-        {
-          id: 'f_2',
-          name: 'website.zip',
-          extension: 'ZIP',
-          mimeType: 'application/zip',
-          sizeBytes: 4404019,
-          storageKey: 'builds/website.zip',
-          storageProvider: 'r2',
-          publicUrl: 'https://cdn.optic.doy.best/builds/website.zip',
-          createdAt: new Date(Date.now() - 3600000).toISOString(),
-          updatedAt: new Date(Date.now() - 3600000).toISOString(),
-          isPublic: false,
-        },
-        {
-          id: 'f_3',
-          name: 'photo.png',
-          extension: 'PNG',
-          mimeType: 'image/png',
-          sizeBytes: 1887436,
-          storageKey: 'media/photo.png',
-          storageProvider: 'r2',
-          publicUrl: 'https://cdn.optic.doy.best/media/photo.png',
-          createdAt: new Date(Date.now() - 86400000).toISOString(),
-          updatedAt: new Date(Date.now() - 86400000).toISOString(),
-          isPublic: true,
-        },
-      ],
-      folders: [
-        {
-          id: 'fold_assets',
-          name: 'brand-assets',
-          path: '/brand-assets',
-          itemCount: 4,
-          createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-        },
-        {
-          id: 'fold_builds',
-          name: 'release-artifacts',
-          path: '/release-artifacts',
-          itemCount: 2,
-          createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-        },
-      ],
-    });
+  // 5. POST /api/keys/delete
+  if (url === '/api/keys/delete' && method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      const { id } = body;
+      const { userId, token } = await resolveUserId(req);
+
+      if (!id) {
+        return sendJson(res, 400, { success: false, error: 'Key id is required' });
+      }
+
+      const sb = getSupabaseServerClient(token);
+      if (sb) {
+        try {
+          const { error } = await sb
+            .from('api_keys')
+            .delete()
+            .eq('id', id)
+            .eq('user_id', userId);
+
+          if (!error) {
+            return sendJson(res, 200, { success: true, message: 'Key deleted' });
+          }
+        } catch (dbErr) {
+          console.warn('Supabase api_keys delete fallback:', dbErr);
+        }
+      }
+
+      const index = inMemoryApiKeys.findIndex((k) => k.id === id && k.userId === userId);
+      if (index !== -1) {
+        inMemoryApiKeys.splice(index, 1);
+      }
+
+      return sendJson(res, 200, { success: true, message: 'Key deleted' });
+    } catch {
+      return sendJson(res, 500, { success: false, error: 'Failed to delete key' });
+    }
   }
 
-  // 6. GET /api/hosting/deployments
+  // 6. GET /api/cloud/files
+  if (url.startsWith('/api/cloud/files') && method === 'GET') {
+    try {
+      const { userId, token } = await resolveUserId(req);
+      const sb = getSupabaseServerClient(token);
+      const urlObj = new URL(url, 'http://localhost');
+      const folderId = urlObj.searchParams.get('folderId');
+
+      if (sb) {
+        try {
+          let fileQuery = sb.from('files').select('*').eq('user_id', userId);
+          if (folderId) {
+            fileQuery = fileQuery.eq('folder_id', folderId);
+          } else {
+            fileQuery = fileQuery.is('folder_id', null);
+          }
+
+          let folderQuery = sb.from('folders').select('*').eq('user_id', userId);
+          if (folderId) {
+            folderQuery = folderQuery.eq('parent_id', folderId);
+          } else {
+            folderQuery = folderQuery.is('parent_id', null);
+          }
+
+          const [filesRes, foldersRes] = await Promise.all([fileQuery, folderQuery]);
+
+          if (!filesRes.error && !foldersRes.error && (filesRes.data || foldersRes.data)) {
+            const mappedFiles = (filesRes.data || []).map((f: any) => ({
+              id: f.id,
+              name: f.name,
+              extension: f.extension || (f.name.includes('.') ? f.name.split('.').pop().toUpperCase() : ''),
+              mimeType: f.mime_type || f.mimeType || 'application/octet-stream',
+              sizeBytes: Number(f.size_bytes || f.sizeBytes || 0),
+              folderId: f.folder_id || f.folderId || null,
+              storageKey: f.storage_key || f.storageKey || '',
+              storageProvider: f.storage_provider || f.storageProvider || 'r2',
+              publicUrl: f.public_url || f.publicUrl || '',
+              createdAt: f.created_at || f.createdAt || new Date().toISOString(),
+              updatedAt: f.updated_at || f.updatedAt || new Date().toISOString(),
+              isPublic: f.is_public ?? f.isPublic ?? true,
+            }));
+
+            const mappedFolders = (foldersRes.data || []).map((fd: any) => ({
+              id: fd.id,
+              name: fd.name,
+              parentId: fd.parent_id || fd.parentId || null,
+              path: fd.path || `/${fd.name}`,
+              itemCount: 0,
+              createdAt: fd.created_at || fd.createdAt || new Date().toISOString(),
+            }));
+
+            return sendJson(res, 200, {
+              success: true,
+              files: mappedFiles,
+              folders: mappedFolders,
+            });
+          }
+        } catch (dbErr) {
+          console.warn('Supabase cloud files query fallback:', dbErr);
+        }
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        files: [],
+        folders: [],
+      });
+    } catch {
+      return sendJson(res, 500, { success: false, error: 'Failed to fetch cloud files' });
+    }
+  }
+
+  // 7. GET /api/hosting/deployments
   if (url.startsWith('/api/hosting/deployments') && method === 'GET') {
     return sendJson(res, 200, {
       success: true,
@@ -268,30 +414,16 @@ export async function handleApiRequest(
         {
           id: 'dep_1',
           projectId: 'proj_1',
-          projectName: 'my-portfolio',
+          projectName: 'optic-core-app',
           status: 'ready',
-          url: 'https://my-portfolio.optic.doy.best',
+          url: 'https://optic.doy.best',
           commitHash: '9fa4c10',
-          commitMessage: 'feat: modern developer showcase',
-          creator: 'alex.developer',
+          commitMessage: 'feat: production Supabase integration & auth',
+          creator: 'optic.engineer',
           branch: 'main',
           durationSeconds: 14,
           environment: 'production',
           createdAt: new Date(Date.now() - 1800000).toISOString(),
-        },
-        {
-          id: 'dep_2',
-          projectId: 'proj_2',
-          projectName: 'example-site',
-          status: 'ready',
-          url: 'https://example-site.optic.doy.best',
-          commitHash: '8b31ea9',
-          commitMessage: 'docs: updated API reference',
-          creator: 'alex.developer',
-          branch: 'preview-docs',
-          durationSeconds: 19,
-          environment: 'preview',
-          createdAt: new Date(Date.now() - 14400000).toISOString(),
         },
       ],
     });

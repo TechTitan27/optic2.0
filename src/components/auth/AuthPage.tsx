@@ -41,22 +41,41 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         try {
           const sb = getSupabase();
           if (sb) {
-            // Check session from URL hash / query
+            // Check session from URL hash / query parameters
             const { data, error: sessionErr } = await sb.auth.getSession();
             if (sessionErr) throw sessionErr;
+
             if (data.session) {
               setCallbackState('success');
+              // If opened in popup, postMessage to parent opener and close
+              if (window.opener && window.opener !== window) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+                setTimeout(() => {
+                  window.close();
+                }, 400);
+                return;
+              }
+
               setTimeout(() => {
                 onNavigate(redirectSurface, redirectPath);
-              }, 600);
+              }, 500);
               return;
             }
           }
-          // If no session found yet, wait or redirect
+
+          // In case the session is still exchanging in background
+          if (window.opener && window.opener !== window) {
+            window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+            setTimeout(() => {
+              window.close();
+            }, 500);
+            return;
+          }
+
           setCallbackState('success');
           setTimeout(() => {
             onNavigate(redirectSurface, redirectPath);
-          }, 800);
+          }, 600);
         } catch (err: any) {
           setError(err?.message || 'Authentication verification failed.');
           setCallbackState('error');
@@ -126,4 +145,3 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     />
   );
 };
-

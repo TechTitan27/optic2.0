@@ -1,19 +1,23 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User } from '@supabase/supabase-js';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { User, Session } from '@supabase/supabase-js';
 import {
   getSupabase,
-  isSupabaseConfigured,
+  checkSupabaseConfigured,
   signInWithEmailPassword,
   signUpWithEmailPassword,
   signInWithGoogle as supGoogleSignIn,
   signOutUser,
-  SUPABASE_URL,
+  getActiveSupabaseUrl,
+  getActiveAnonKey,
 } from '../lib/supabaseClient';
 import { UserProfile } from '../types';
+import { notifyToast } from './ToastContext';
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
+  session: Session | null;
+  accessToken: string | null;
   loading: boolean;
   isSupabaseConfigured: boolean;
   supabaseUrl: string;
@@ -24,113 +28,203 @@ interface AuthContextType {
   signUp: (email: string, password: string, fullName?: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
-  demoLogin: (role?: string) => void;
+  refreshSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Storage key for cross-surface session simulation when local keys are being configured
 const LOCAL_SESSION_KEY = 'optic_auth_user_session';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [isConfigured, setIsConfigured] = useState<boolean>(() => checkSupabaseConfigured());
 
   const openAuthModal = () => setIsAuthModalOpen(true);
   const closeAuthModal = () => setIsAuthModalOpen(false);
 
+  const syncUserFromSession = useCallback((currentSession: Session | null) => {
+    setSession(currentSession);
+    setAccessToken(currentSession?.access_token || null);
+    if (currentSession?.user) {
+      const u = currentSession.user;
+      setUser(u);
+      const fullName =
+        u.user_metadata?.full_name ||
+        u.user_metadata?.name ||
+        u.email?.split('@')[0] ||
+        'developer';
+      const avatarUrl =
+        u.user_metadata?.avatar_url ||
+        u.user_metadata?.picture ||
+        undefined;
+
+      const userProf: UserProfile = {
+        id: u.id,
+        email: u.email || 'developer@optic.doy.best',
+        fullName,
+        avatarUrl,
+        createdAt: u.created_at,
+        tier: 'developer',
+      };
+      setProfile(userProf);
+      try {
+        localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: u, profile: userProf }));
+      } catch {
+        // ignore
+      }
+    } else {
+      setUser(null);
+      setProfile(null);
+      try {
+        localStorage.removeItem(LOCAL_SESSION_KEY);
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
+  const refreshSession = useCallback(async () => {
+    const configured = checkSupabaseConfigured();
+    setIsConfigured(configured);
+
+    const sb = getSupabase();
+    if (sb) {
+      try {
+        const { data, error } = await sb.auth.getSession();
+        if (error) throw error;
+        syncUserFromSession(data.session);
+      } catch (err: any) {
+        console.error('Session refresh error:', err);
+      }
+    }
+  }, [syncUserFromSession]);
+
   useEffect(() => {
     let mounted = true;
+
+    // Purge any legacy fake demo mock accounts stored in localStorage
+    try {
+      const stored = localStorage.getItem(LOCAL_SESSION_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (
+          parsed.user?.id?.startsWith('usr_google_') ||
+          parsed.user?.email === 'alex.developer@optic.doy.best' ||
+          parsed.profile?.fullName === 'Alex Rivera'
+        ) {
+          localStorage.removeItem(LOCAL_SESSION_KEY);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const configured = checkSupabaseConfigured();
+    setIsConfigured(configured);
+
     const sb = getSupabase();
 
     if (sb) {
-      // Real Supabase Auth listener
-      sb.auth.getSession().then(({ data: { session } }) => {
-        if (!mounted) return;
-        if (session?.user) {
-          setUser(session.user);
-          setProfile({
-            id: session.user.id,
-            email: session.user.email || 'developer@optic.doy.best',
-            fullName: session.user.user_metadata?.full_name || session.user.email?.split('@')[0],
-            avatarUrl: session.user.user_metadata?.avatar_url,
-            createdAt: session.user.created_at,
-            tier: 'developer',
-          });
-        }
-        setLoading(false);
-      });
+      // 1. Check existing Supabase session on boot
+      sb.auth
+        .getSession()
+        .then(({ data: { session: initSession }, error }) => {
+          if (!mounted) return;
+          if (error) {
+            console.warn('Initial session lookup warning:', error.message);
+          }
+          syncUserFromSession(initSession);
+          setLoading(false);
+        })
+        .catch((err) => {
+          if (!mounted) return;
+          console.warn('Could not retrieve Supabase session:', err);
+          setLoading(false);
+        });
 
+      // 2. Real-time auth state subscription
       const {
         data: { subscription },
-      } = sb.auth.onAuthStateChange((_event, session) => {
+      } = sb.auth.onAuthStateChange((event, newSession) => {
         if (!mounted) return;
-        if (session?.user) {
-          setUser(session.user);
-          setProfile({
-            id: session.user.id,
-            email: session.user.email || 'developer@optic.doy.best',
-            fullName: session.user.user_metadata?.full_name || session.user.email?.split('@')[0],
-            avatarUrl: session.user.user_metadata?.avatar_url,
-            createdAt: session.user.created_at,
-            tier: 'developer',
-          });
-        } else {
-          setUser(null);
-          setProfile(null);
-        }
+        syncUserFromSession(newSession);
         setLoading(false);
+        if (event === 'SIGNED_IN' && newSession?.user) {
+          notifyToast({
+            type: 'success',
+            title: 'Authenticated',
+            message: `Signed in as ${newSession.user.email || 'developer'}`,
+          });
+        }
       });
+
+      // 3. Popup OAuth message listener
+      const handlePopupMessage = async (event: MessageEvent) => {
+        if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+          const { data } = await sb.auth.getSession();
+          if (data.session && mounted) {
+            syncUserFromSession(data.session);
+            notifyToast({
+              type: 'success',
+              title: 'Google Login Successful',
+              message: `Welcome, ${data.session.user.email}!`,
+            });
+          }
+        }
+      };
+      window.addEventListener('message', handlePopupMessage);
 
       return () => {
         mounted = false;
         subscription.unsubscribe();
+        window.removeEventListener('message', handlePopupMessage);
       };
     } else {
-      // If publishable key is not set yet in Vercel, check if there's an active local preview session
-      try {
-        const stored = localStorage.getItem(LOCAL_SESSION_KEY);
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          setUser(parsed.user);
-          setProfile(parsed.profile);
-        }
-      } catch {
-        // ignore
-      }
+      // Supabase is not configured yet with an Anon Key
       setLoading(false);
       return () => {
         mounted = false;
       };
     }
-  }, []);
+  }, [syncUserFromSession]);
 
   const signIn = async (email: string, password: string) => {
     setLoading(true);
     try {
-      if (isSupabaseConfigured) {
-        await signInWithEmailPassword(email, password);
-      } else {
-        // Offline/pending publishable key mode
-        const mockUser: any = {
-          id: 'usr_' + Math.random().toString(36).substring(2, 9),
-          email,
-          user_metadata: { full_name: email.split('@')[0] },
-          created_at: new Date().toISOString(),
-        };
-        const mockProfile: UserProfile = {
-          id: mockUser.id,
-          email,
-          fullName: email.split('@')[0],
-          createdAt: new Date().toISOString(),
-          tier: 'developer',
-        };
-        setUser(mockUser);
-        setProfile(mockProfile);
-        localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: mockUser, profile: mockProfile }));
+      const configured = checkSupabaseConfigured();
+      if (!configured) {
+        const errorMsg =
+          'Supabase publishable key is not configured. Please set VITE_SUPABASE_PUBLISHABLE_KEY in your environment, or configure your Supabase Anon Key in Settings.';
+        notifyToast({
+          type: 'error',
+          title: 'Sign In Failed: Backend Not Configured',
+          message: errorMsg,
+          duration: 9000,
+        });
+        throw new Error(errorMsg);
       }
+
+      const res = await signInWithEmailPassword(email, password);
+      if (res.session) {
+        syncUserFromSession(res.session);
+        notifyToast({
+          type: 'success',
+          title: 'Welcome Back',
+          message: `Successfully signed in as ${res.user?.email}`,
+        });
+      }
+    } catch (err: any) {
+      notifyToast({
+        type: 'error',
+        title: 'Authentication Failed',
+        message: err?.message || 'Invalid email or password.',
+      });
+      throw err;
     } finally {
       setLoading(false);
     }
@@ -139,89 +233,99 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signUp = async (email: string, password: string, fullName?: string) => {
     setLoading(true);
     try {
-      if (isSupabaseConfigured) {
-        await signUpWithEmailPassword(email, password, fullName);
-      } else {
-        const mockUser: any = {
-          id: 'usr_' + Math.random().toString(36).substring(2, 9),
-          email,
-          user_metadata: { full_name: fullName || email.split('@')[0] },
-          created_at: new Date().toISOString(),
-        };
-        const mockProfile: UserProfile = {
-          id: mockUser.id,
-          email,
-          fullName: fullName || email.split('@')[0],
-          createdAt: new Date().toISOString(),
-          tier: 'developer',
-        };
-        setUser(mockUser);
-        setProfile(mockProfile);
-        localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: mockUser, profile: mockProfile }));
+      const configured = checkSupabaseConfigured();
+      if (!configured) {
+        const errorMsg =
+          'Supabase publishable key is not configured. Please set VITE_SUPABASE_PUBLISHABLE_KEY in your environment, or configure your Supabase Anon Key in Settings.';
+        notifyToast({
+          type: 'error',
+          title: 'Sign Up Failed: Backend Not Configured',
+          message: errorMsg,
+          duration: 9000,
+        });
+        throw new Error(errorMsg);
       }
+
+      const res = await signUpWithEmailPassword(email, password, fullName);
+      if (res.session) {
+        syncUserFromSession(res.session);
+        notifyToast({
+          type: 'success',
+          title: 'Account Created',
+          message: `Welcome to Optic, ${fullName || email}!`,
+        });
+      } else {
+        notifyToast({
+          type: 'info',
+          title: 'Verification Email Sent',
+          message: `Please check ${email} to verify your email address.`,
+        });
+      }
+    } catch (err: any) {
+      notifyToast({
+        type: 'error',
+        title: 'Sign Up Failed',
+        message: err?.message || 'Could not complete registration.',
+      });
+      throw err;
     } finally {
       setLoading(false);
     }
   };
 
   const signInWithGoogle = async () => {
-    if (isSupabaseConfigured) {
-      await supGoogleSignIn();
-    } else {
-      // Preview demonstration
-      const demoEmail = 'developer.google@optic.doy.best';
-      const mockUser: any = {
-        id: 'usr_google_' + Math.random().toString(36).substring(2, 9),
-        email: demoEmail,
-        user_metadata: {
-          full_name: 'Alex Rivera',
-          avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=128&fit=crop&crop=face',
-        },
-        created_at: new Date().toISOString(),
-      };
-      const mockProfile: UserProfile = {
-        id: mockUser.id,
-        email: demoEmail,
-        fullName: 'Alex Rivera',
-        avatarUrl: mockUser.user_metadata.avatar_url,
-        createdAt: new Date().toISOString(),
-        tier: 'developer',
-      };
-      setUser(mockUser);
-      setProfile(mockProfile);
-      localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: mockUser, profile: mockProfile }));
+    const configured = checkSupabaseConfigured();
+    if (!configured) {
+      const errorMsg =
+        'Supabase publishable key is not configured. Please set VITE_SUPABASE_PUBLISHABLE_KEY in your environment, or configure your Supabase Anon Key in Settings to enable Google Authentication.';
+      notifyToast({
+        type: 'error',
+        title: 'Google Login Unavailable',
+        message: errorMsg,
+        duration: 9000,
+      });
+      throw new Error(errorMsg);
     }
-  };
 
-  const demoLogin = (name = 'Alex Rivera') => {
-    const demoEmail = 'alex.developer@optic.doy.best';
-    const mockUser: any = {
-      id: 'usr_demo_dev',
-      email: demoEmail,
-      user_metadata: { full_name: name },
-      created_at: new Date().toISOString(),
-    };
-    const mockProfile: UserProfile = {
-      id: mockUser.id,
-      email: demoEmail,
-      fullName: name,
-      createdAt: new Date().toISOString(),
-      tier: 'developer',
-    };
-    setUser(mockUser);
-    setProfile(mockProfile);
-    localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: mockUser, profile: mockProfile }));
+    try {
+      notifyToast({
+        type: 'info',
+        title: 'Connecting to Google',
+        message: 'Initializing Google OAuth with Supabase...',
+        duration: 4000,
+      });
+      await supGoogleSignIn();
+    } catch (err: any) {
+      notifyToast({
+        type: 'error',
+        title: 'Google Login Error',
+        message: err?.message || 'Failed to initialize Google OAuth.',
+        duration: 8000,
+      });
+      throw err;
+    }
   };
 
   const signOut = async () => {
     setLoading(true);
     try {
-      if (isSupabaseConfigured) {
-        await signOutUser();
-      }
+      await signOutUser();
       setUser(null);
       setProfile(null);
+      setSession(null);
+      setAccessToken(null);
       localStorage.removeItem(LOCAL_SESSION_KEY);
+      notifyToast({
+        type: 'info',
+        title: 'Signed Out',
+        message: 'You have been securely signed out.',
+      });
+    } catch (err: any) {
+      notifyToast({
+        type: 'error',
+        title: 'Sign Out Error',
+        message: err?.message || 'Error while signing out.',
+      });
     } finally {
       setLoading(false);
     }
@@ -232,9 +336,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         profile,
+        session,
+        accessToken,
         loading,
-        isSupabaseConfigured,
-        supabaseUrl: SUPABASE_URL,
+        isSupabaseConfigured: isConfigured,
+        supabaseUrl: getActiveSupabaseUrl(),
         isAuthModalOpen,
         openAuthModal,
         closeAuthModal,
@@ -242,7 +348,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signUp,
         signInWithGoogle,
         signOut,
-        demoLogin,
+        refreshSession,
       }}
     >
       {children}

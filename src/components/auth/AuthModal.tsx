@@ -19,7 +19,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   initialMode = 'signin',
   onSuccess,
 }) => {
-  const { signIn, signUp, signInWithGoogle, demoLogin, isSupabaseConfigured, supabaseUrl } = useAuth();
+  const { signIn, signUp, signInWithGoogle, isSupabaseConfigured, supabaseUrl } = useAuth();
   const [mode, setMode] = useState<'signin' | 'signup'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -40,12 +40,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         onClose();
       } else {
         await signUp(email, password, fullName);
-        if (isSupabaseConfigured) {
-          setSignupSuccess(true);
-        } else {
-          onSuccess?.();
-          onClose();
-        }
+        setSignupSuccess(true);
       }
     } catch (err: any) {
       setError(err?.message || 'Authentication failed. Please check your credentials.');
@@ -59,21 +54,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setLoading(true);
     try {
       await signInWithGoogle();
-      if (!isSupabaseConfigured) {
-        onSuccess?.();
-        onClose();
-      }
     } catch (err: any) {
       setError(err?.message || 'Failed to authenticate with Google.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDemoSignIn = () => {
-    demoLogin('Alex Rivera');
-    onSuccess?.();
-    onClose();
   };
 
   return (
@@ -235,21 +220,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           Continue with Google
         </Button>
 
-        {/* Demo Fast Login for Instant Testing */}
-        <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs text-zinc-400">
-          <span className="text-[11px] text-zinc-500">Fast preview test:</span>
-          <button
-            type="button"
-            onClick={handleDemoSignIn}
-            className="text-xs text-sky-400 hover:text-sky-300 font-medium flex items-center gap-1"
-          >
-            <span>Sign in as Test Developer</span>
-            <ArrowRight size={12} />
-          </button>
-        </div>
-
         {/* Cross-subdomain explanation note */}
-        <div className="text-[10px] text-zinc-500 leading-relaxed font-mono bg-zinc-950 p-2.5 rounded-lg border border-zinc-800/60">
+        <div className="text-[10px] text-zinc-500 leading-relaxed font-mono bg-zinc-950 p-2.5 rounded-lg border border-zinc-800/60 mt-2">
           <span className="text-zinc-400 font-semibold">Cross-Subdomain SSO:</span> Authenticating sets your Optic session cookie across optic.doy.best, cloud.optic.doy.best, and hosting.optic.doy.best.
         </div>
       </div>

@@ -4,10 +4,10 @@ import { Input } from '../common/Input';
 import { Modal } from '../common/Modal';
 import { ApiKeyItem, NewApiKeyResult } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { Key, Plus, Trash2, Copy, Check, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Key, Plus, Trash2, Copy, Check, ShieldCheck, AlertTriangle, ShieldAlert } from 'lucide-react';
 
 export const ApiKeysView: React.FC = () => {
-  const { user } = useAuth();
+  const { user, accessToken } = useAuth();
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -17,43 +17,41 @@ export const ApiKeysView: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const getAuthHeaders = () => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
+    }
+    if (user?.id) {
+      headers['x-user-id'] = user.id;
+    }
+    return headers;
+  };
+
   const fetchKeys = async () => {
     setLoading(true);
     try {
       const res = await fetch('/api/keys/list', {
-        headers: {
-          'x-user-id': user?.id || 'usr_dev',
-        },
+        headers: getAuthHeaders(),
       });
       if (res.ok) {
         const data = await res.json();
         setKeys(data.keys || []);
       } else {
-        setFallbackKeys();
+        setKeys([]);
       }
     } catch {
-      setFallbackKeys();
+      setKeys([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const setFallbackKeys = () => {
-    setKeys([
-      {
-        id: 'key_default_cli',
-        name: 'My CLI key',
-        keyPrefix: 'opt_live_9a7b4f2c...',
-        createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-        lastUsedAt: new Date(Date.now() - 3600000 * 4).toISOString(),
-        status: 'active',
-      },
-    ]);
-  };
-
   useEffect(() => {
     fetchKeys();
-  }, [user]);
+  }, [user, accessToken]);
 
   const handleCreateKey = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,10 +62,7 @@ export const ApiKeysView: React.FC = () => {
     try {
       const res = await fetch('/api/keys/create', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': user?.id || 'usr_dev',
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ name: newKeyName.trim() }),
       });
 
@@ -77,31 +72,7 @@ export const ApiKeysView: React.FC = () => {
         setNewKeyName('');
         fetchKeys();
       } else {
-        // Fallback local key generation for preview
-        const rawSuffix = Array.from({ length: 24 }, () =>
-          Math.floor(Math.random() * 16).toString(16)
-        ).join('');
-        const rawKey = `opt_live_${rawSuffix}`;
-        const newK: NewApiKeyResult = {
-          id: 'key_' + Math.random().toString(36).substring(2, 8),
-          name: newKeyName.trim(),
-          rawKey,
-          keyPrefix: `opt_live_${rawSuffix.substring(0, 8)}...`,
-          createdAt: new Date().toISOString(),
-        };
-        setGeneratedKey(newK);
-        setKeys((prev) => [
-          {
-            id: newK.id,
-            name: newK.name,
-            keyPrefix: newK.keyPrefix,
-            createdAt: newK.createdAt,
-            lastUsedAt: null,
-            status: 'active',
-          },
-          ...prev,
-        ]);
-        setNewKeyName('');
+        setError(data.error || 'Failed to generate API key. Please check server logs.');
       }
     } catch {
       setError('Failed to create key. Please try again.');
@@ -111,25 +82,40 @@ export const ApiKeysView: React.FC = () => {
   };
 
   const handleRevokeKey = async (id: string) => {
-    if (!confirm('Are you sure you want to revoke this API key? Applications using it will immediately fail authentication.')) {
+    if (
+      !confirm(
+        'Are you sure you want to revoke this API key? Applications using it will immediately fail authentication.'
+      )
+    ) {
       return;
     }
     try {
       await fetch('/api/keys/revoke', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': user?.id || 'usr_dev',
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ id }),
       });
       setKeys((prev) =>
         prev.map((k) => (k.id === id ? { ...k, status: 'revoked' as const } : k))
       );
     } catch {
-      setKeys((prev) =>
-        prev.map((k) => (k.id === id ? { ...k, status: 'revoked' as const } : k))
-      );
+      fetchKeys();
+    }
+  };
+
+  const handleDeleteKey = async (id: string) => {
+    if (!confirm('Are you sure you want to permanently delete this API key record?')) {
+      return;
+    }
+    try {
+      await fetch('/api/keys/delete', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ id }),
+      });
+      setKeys((prev) => prev.filter((k) => k.id !== id));
+    } catch {
+      fetchKeys();
     }
   };
 
@@ -145,7 +131,7 @@ export const ApiKeysView: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold tracking-tight text-white">API Keys</h1>
           <p className="text-xs text-zinc-400 mt-1">
-            Create keys for accessing Optic programmatically.
+            Create and manage keys for accessing Optic APIs, SDKs, and CLI tools.
           </p>
         </div>
         <Button
@@ -162,11 +148,23 @@ export const ApiKeysView: React.FC = () => {
         </Button>
       </div>
 
+      {/* Security Architecture Info Banner */}
+      <div className="p-3.5 rounded-xl border border-zinc-800 bg-zinc-900/40 flex items-start gap-3">
+        <ShieldCheck size={16} className="text-sky-400 shrink-0 mt-0.5" />
+        <div className="text-xs text-zinc-300 leading-relaxed">
+          <span className="font-semibold text-white">Cryptographic Security Notice:</span> All API keys
+          are generated using 32 bytes of cryptographic entropy on the server, SHA-256 hashed before
+          storing in Supabase, and the raw key is never stored in plaintext. Sensitive operations run
+          strictly server-side.
+        </div>
+      </div>
+
       {/* Keys Table Card */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 overflow-hidden">
         {loading ? (
-          <div className="p-8 text-center text-xs text-zinc-500 font-mono">
-            Loading API keys...
+          <div className="p-8 text-center text-xs text-zinc-500 font-mono flex items-center justify-center gap-2">
+            <div className="w-4 h-4 border-2 border-zinc-600 border-t-zinc-200 rounded-full animate-spin" />
+            <span>Loading API keys from Supabase database...</span>
           </div>
         ) : keys.length === 0 ? (
           <div className="p-12 text-center flex flex-col items-center gap-3">
@@ -200,7 +198,7 @@ export const ApiKeysView: React.FC = () => {
                   <th className="py-2.5 px-4 font-semibold">CREATED</th>
                   <th className="py-2.5 px-4 font-semibold">LAST USED</th>
                   <th className="py-2.5 px-4 font-semibold">STATUS</th>
-                  <th className="py-2.5 px-4 font-semibold text-right">ACTION</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">ACTIONS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60">
@@ -228,16 +226,23 @@ export const ApiKeysView: React.FC = () => {
                       )}
                     </td>
                     <td className="py-3 px-4 text-right">
-                      {k.status === 'active' ? (
+                      <div className="flex items-center justify-end gap-2">
+                        {k.status === 'active' && (
+                          <button
+                            onClick={() => handleRevokeKey(k.id)}
+                            className="text-xs text-zinc-400 hover:text-amber-400 transition-colors font-sans"
+                          >
+                            Revoke
+                          </button>
+                        )}
                         <button
-                          onClick={() => handleRevokeKey(k.id)}
-                          className="text-xs text-zinc-400 hover:text-red-400 transition-colors font-sans"
+                          onClick={() => handleDeleteKey(k.id)}
+                          className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-red-400 transition-colors"
+                          title="Delete key record"
                         >
-                          Revoke
+                          <Trash2 size={13} />
                         </button>
-                      ) : (
-                        <span className="text-zinc-600 text-[11px]">—</span>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -254,7 +259,7 @@ export const ApiKeysView: React.FC = () => {
         title={generatedKey ? 'API Key Created' : 'Create API Key'}
         description={
           generatedKey
-            ? "Copy this key now. It won't be shown again."
+            ? "Copy this key now. It will never be shown again."
             : 'Enter a descriptive name for this key.'
         }
       >
@@ -263,13 +268,14 @@ export const ApiKeysView: React.FC = () => {
             <div className="p-3.5 rounded-lg bg-amber-950/20 border border-amber-900/40 text-amber-300 text-xs flex items-start gap-2">
               <AlertTriangle size={15} className="shrink-0 mt-0.5 text-amber-400" />
               <span>
-                Copy this key now. It won't be shown again.
+                <strong>Important:</strong> Copy this secret key now. Because it is stored as a cryptographic
+                SHA-256 hash in Supabase, Optic cannot show it to you again.
               </span>
             </div>
 
             <div>
               <span className="text-xs font-medium text-zinc-400 block mb-1.5 font-sans">
-                Your API key
+                Your Raw API Key
               </span>
               <div className="flex items-center gap-2">
                 <div className="flex-1 p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-xs text-emerald-400 break-all select-all">
@@ -295,7 +301,7 @@ export const ApiKeysView: React.FC = () => {
                   setCreateModalOpen(false);
                 }}
               >
-                Done
+                I have saved my key
               </Button>
             </div>
           </div>
@@ -312,7 +318,7 @@ export const ApiKeysView: React.FC = () => {
                 Key name
               </label>
               <Input
-                placeholder="e.g. My CLI key"
+                placeholder="e.g. CLI Production Deployment"
                 value={newKeyName}
                 onChange={(e) => setNewKeyName(e.target.value)}
                 required

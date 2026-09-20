@@ -1,4 +1,4 @@
-import { FileItem, FolderItem } from '../types';
+import { getSupabase } from './supabaseClient';
 
 export interface StorageUploadRequest {
   fileName: string;
@@ -7,18 +7,18 @@ export interface StorageUploadRequest {
   folderId?: string | null;
 }
 
-export interface StorageUploadResponse {
-  uploadUrl?: string;
-  storageKey: string;
-  provider: 'r2' | 'direct' | 'simulation';
-  expiresInSeconds: number;
-  requiresDirectR2: boolean;
-  notes: string;
+export interface StorageUploadResult {
+  success: boolean;
+  storageKey?: string;
+  publicUrl?: string;
+  storageProvider?: 'r2' | 'supabase_storage';
+  error?: string;
 }
 
 /**
  * Storage adapter abstraction
- * Designed to interface with Cloudflare R2 signed upload URLs or local dev uploads
+ * Strictly isolated so Cloudflare R2 or Supabase Storage can be plugged in without refactoring UI.
+ * Explicitly rejects faked successful byte uploads when storage credentials are not provided.
  */
 export class OpticStorageService {
   private isR2Configured: boolean;
@@ -31,9 +31,53 @@ export class OpticStorageService {
     return {
       provider: this.isR2Configured ? 'Cloudflare R2' : 'Optic Modular Adapter (Awaiting R2 credentials)',
       isR2Configured: this.isR2Configured,
-      objectStorageReady: false,
-      metadataEngine: 'Supabase PostgreSQL (files & folders tables)',
-      notice: 'R2 credentials (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are configured server-side. File metadata is securely synced to Supabase.'
+      objectStorageReady: this.isR2Configured,
+      metadataEngine: 'Supabase PostgreSQL (files, folders, share_links, usage)',
+      notice:
+        'R2 credentials (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are configured server-side. File metadata is securely synced to Supabase.',
+    };
+  }
+
+  /**
+   * Uploads file bytes to real storage backend.
+   * If R2 is not yet configured, attempts Supabase Storage bucket 'optic-files'.
+   * If neither is configured, returns an explicit error rather than faking success.
+   */
+  async uploadFile(file: File, folderPath?: string): Promise<StorageUploadResult> {
+    const sb = getSupabase();
+    if (sb) {
+      try {
+        const cleanPath = folderPath ? `${folderPath.replace(/^\//, '')}/${file.name}` : file.name;
+        const storageKey = `uploads/${Date.now()}_${cleanPath.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+
+        const { data, error } = await sb.storage.from('optic-files').upload(storageKey, file, {
+          cacheControl: '3600',
+          upsert: false,
+        });
+
+        if (!error && data) {
+          const {
+            data: { publicUrl },
+          } = sb.storage.from('optic-files').getPublicUrl(storageKey);
+          return {
+            success: true,
+            storageKey,
+            publicUrl:
+              publicUrl ||
+              `https://dsrvkqutqxuvmfhbcuvy.supabase.co/storage/v1/object/public/optic-files/${storageKey}`,
+            storageProvider: 'supabase_storage',
+          };
+        }
+      } catch (storageErr) {
+        console.warn('Supabase storage upload attempt:', storageErr);
+      }
+    }
+
+    // Do NOT fake successful uploads per prompt instructions
+    return {
+      success: false,
+      error:
+        'Object storage backend is not yet connected. Cloudflare R2 credentials (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) or a Supabase Storage bucket ("optic-files") must be provisioned to store object binary data.',
     };
   }
 
@@ -49,7 +93,7 @@ export class OpticStorageService {
   detectMimeType(fileName: string): { type: string; ext: string } {
     const parts = fileName.split('.');
     const ext = parts.length > 1 ? parts.pop()!.toLowerCase() : 'bin';
-    
+
     const mimeMap: Record<string, string> = {
       png: 'image/png',
       jpg: 'image/jpeg',
@@ -68,6 +112,7 @@ export class OpticStorageService {
       pdf: 'application/pdf',
       txt: 'text/plain',
       md: 'text/markdown',
+      csv: 'text/csv',
     };
 
     return {
