@@ -2,8 +2,20 @@
   "version": 2,
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
+      "source": "/api/keys/:action*",
+      "destination": "/api/keys/:action*"
+    },
+    {
+      "source": "/v1/keys/:action*",
+      "destination": "/api/keys/:action*"
+    },
+    {
+      "source": "/api/waitlist",
+      "destination": "/api/waitlist"
+    },
+    {
+      "source": "/v1/waitlist",
+      "destination": "/api/waitlist"
     },
     {
       "source": "/(.*)",

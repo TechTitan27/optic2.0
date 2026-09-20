@@ -11,11 +11,13 @@ import { SettingsView } from './components/dashboard/SettingsView';
 import { CloudInterface } from './components/cloud/CloudInterface';
 import { HostingInterface } from './components/hosting/HostingInterface';
 import { DocsInterface } from './components/docs/DocsInterface';
+import { ApiInterface } from './components/api/ApiInterface';
 import { AuthPage } from './components/auth/AuthPage';
 import { AuthGate } from './components/auth/AuthGate';
 import { PrivacyPage } from './components/legal/PrivacyPage';
 import { TermsPage } from './components/legal/TermsPage';
 import { NotFoundPage } from './components/common/NotFoundPage';
+import { DomainSwitcher } from './components/common/DomainSwitcher';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 function MainApp() {
@@ -62,10 +64,15 @@ function MainApp() {
         return { surface: 'terms', path: '/terms' };
       }
 
-      // 4. Subdomains
-      if (host.startsWith('cloud.')) return { surface: 'cloud', path: '/' };
-      if (host.startsWith('hosting.')) return { surface: 'hosting', path: '/' };
-      if (host.startsWith('docs.')) return { surface: 'docs', path: '/' };
+      // 4. Subdomain-based product surfaces
+      // - cloud.optic.doy.best → Optic Cloud
+      // - hosting.optic.doy.best → Optic Hosting
+      // - docs.optic.doy.best → Optic Docs
+      // - api.optic.doy.best → Optic API
+      if (host.startsWith('cloud.') || host === 'cloud.localhost') return { surface: 'cloud', path: path || '/' };
+      if (host.startsWith('hosting.') || host === 'hosting.localhost') return { surface: 'hosting', path: path || '/' };
+      if (host.startsWith('docs.') || host === 'docs.localhost') return { surface: 'docs', path: path || '/' };
+      if (host.startsWith('api.') || host === 'api.localhost') return { surface: 'api', path: path || '/' };
 
       // 5. Dashboard routes and specific sub-tabs
       if (
@@ -87,7 +94,7 @@ function MainApp() {
         return { surface: 'dashboard', path: '/dashboard', tab: 'overview' };
       }
 
-      // 6. Cloud Storage & Buckets
+      // 6. Cloud Storage & Buckets (local development fallback or direct path)
       if (
         path.startsWith('/cloud') ||
         path.startsWith('/storage') ||
@@ -96,7 +103,7 @@ function MainApp() {
         return { surface: 'cloud', path: '/cloud' };
       }
 
-      // 7. Hosting & Deployments
+      // 7. Hosting & Deployments (local development fallback or direct path)
       if (
         path.startsWith('/hosting') ||
         path.startsWith('/sites') ||
@@ -106,7 +113,7 @@ function MainApp() {
         return { surface: 'hosting', path: '/hosting' };
       }
 
-      // 8. Documentation
+      // 8. Documentation (local development fallback or direct path)
       if (
         path.startsWith('/docs') ||
         path.startsWith('/documentation') ||
@@ -116,12 +123,21 @@ function MainApp() {
         return { surface: 'docs', path: '/docs' };
       }
 
-      // 9. Root landing page
+      // 9. Developer API area (local development fallback or direct path)
+      if (
+        path === '/api' ||
+        path.startsWith('/api/') ||
+        path.startsWith('/developer')
+      ) {
+        return { surface: 'api', path: '/api' };
+      }
+
+      // 10. Root landing page
       if (path === '/' || path === '') {
         return { surface: 'main', path: '/' };
       }
 
-      // 10. Unmatched path -> in-app 404 page with navigation options
+      // 11. Unmatched path -> in-app 404 page with navigation options
       return { surface: 'notfound', path };
     }
     return { surface: 'main', path: '/' };
@@ -148,6 +164,54 @@ function MainApp() {
     path: string = '/',
     tab?: 'overview' | 'keys' | 'settings'
   ) => {
+    if (typeof window !== 'undefined') {
+      const host = window.location.hostname.toLowerCase();
+      const isProd = host === 'optic.doy.best' || host.endsWith('.optic.doy.best');
+
+      if (isProd) {
+        let targetOrigin = 'https://optic.doy.best';
+        let targetPath = path;
+
+        if (surface === 'cloud') {
+          targetOrigin = 'https://cloud.optic.doy.best';
+          targetPath = path === '/cloud' ? '/' : path;
+        } else if (surface === 'hosting') {
+          targetOrigin = 'https://hosting.optic.doy.best';
+          targetPath = path === '/hosting' ? '/' : path;
+        } else if (surface === 'docs') {
+          targetOrigin = 'https://docs.optic.doy.best';
+          targetPath = path === '/docs' ? '/' : path;
+        } else if (surface === 'api') {
+          targetOrigin = 'https://api.optic.doy.best';
+          targetPath = path === '/api' ? '/' : path;
+        } else if (surface === 'dashboard') {
+          targetOrigin = 'https://optic.doy.best';
+          targetPath =
+            tab === 'keys'
+              ? '/dashboard/keys'
+              : tab === 'settings'
+              ? '/dashboard/settings'
+              : '/dashboard';
+        } else if (surface === 'main') {
+          targetOrigin = 'https://optic.doy.best';
+          targetPath = '/';
+        } else if (surface === 'login') {
+          targetOrigin = 'https://optic.doy.best';
+          targetPath = '/login';
+        } else if (surface === 'signup') {
+          targetOrigin = 'https://optic.doy.best';
+          targetPath = '/signup';
+        }
+
+        const currentOrigin = window.location.origin;
+        if (targetOrigin !== currentOrigin) {
+          window.location.href = `${targetOrigin}${targetPath}`;
+          return;
+        }
+      }
+    }
+
+    // Localhost or same-origin navigation
     setCurrentSurface(surface);
     setCurrentPath(path);
     if (tab) {
@@ -162,6 +226,7 @@ function MainApp() {
       } else if (surface === 'cloud') nextUrl = '/cloud';
       else if (surface === 'hosting') nextUrl = '/hosting';
       else if (surface === 'docs') nextUrl = '/docs';
+      else if (surface === 'api') nextUrl = '/api';
       else if (surface === 'privacy') nextUrl = '/privacy';
       else if (surface === 'terms') nextUrl = '/terms';
       else if (surface === 'login') nextUrl = '/login';
@@ -193,6 +258,14 @@ function MainApp() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col selection:bg-zinc-800 selection:text-white">
+      {/* Universal Surface Navigation & Domain Bar */}
+      <DomainSwitcher
+        currentSurface={currentSurface}
+        currentPath={currentPath}
+        onNavigate={handleNavigateSurface}
+        userEmail={user?.email}
+      />
+
       {/* Active Surface Router */}
       <div className="flex-1 flex flex-col">
         {currentSurface === 'main' && (
@@ -293,6 +366,20 @@ function MainApp() {
         {/* Public Docs */}
         {currentSurface === 'docs' && (
           <DocsInterface onNavigateSurface={handleNavigateSurface} />
+        )}
+
+        {/* Optic Developer API */}
+        {currentSurface === 'api' && (
+          <ApiInterface
+            onNavigateSurface={handleNavigateSurface}
+            onOpenAuth={(mode) => {
+              setRedirectTarget({ surface: 'api', path: '/api' });
+              handleNavigateSurface(
+                mode === 'signup' ? 'signup' : 'login',
+                mode === 'signup' ? '/signup' : '/login'
+              );
+            }}
+          />
         )}
 
         {/* Legal Pages */}

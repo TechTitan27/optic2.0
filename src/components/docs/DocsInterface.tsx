@@ -204,6 +204,14 @@ export const DocsInterface: React.FC<DocsInterfaceProps> = ({ onNavigateSurface 
           </Button>
           <Button
             size="sm"
+            variant="ghost"
+            onClick={() => onNavigateSurface('api', '/')}
+            className="text-xs text-zinc-400 hidden sm:inline-flex"
+          >
+            API
+          </Button>
+          <Button
+            size="sm"
             variant="outline"
             onClick={() => onNavigateSurface('main', '/')}
             className="text-xs"

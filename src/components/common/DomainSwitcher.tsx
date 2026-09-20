@@ -1,5 +1,5 @@
 import React from 'react';
-import { Lock, Globe, HardDrive, Server, LayoutDashboard, BookOpen } from 'lucide-react';
+import { Lock, Globe, HardDrive, Server, LayoutDashboard, BookOpen, Key } from 'lucide-react';
 import { SurfaceType } from '../../types';
 
 interface DomainSwitcherProps {
@@ -34,6 +34,9 @@ export const DomainSwitcher: React.FC<DomainSwitcherProps> = ({
           {currentSurface === 'docs' && (
             <span className="text-teal-400 font-semibold">docs.</span>
           )}
+          {currentSurface === 'api' && (
+            <span className="text-amber-400 font-semibold">api.</span>
+          )}
           <span className="text-zinc-100">optic.doy.best</span>
           {currentSurface === 'dashboard' && (
             <span className="text-sky-400">/dashboard</span>
@@ -52,7 +55,7 @@ export const DomainSwitcher: React.FC<DomainSwitcherProps> = ({
         </div>
       </div>
 
-      {/* Surface Quick-Jump Tabs - Pure UI Labels, No Raw URLs */}
+      {/* Surface Quick-Jump Tabs - Pure UI Labels: Dashboard, Cloud, Hosting, Docs, API */}
       <div className="flex items-center gap-1">
         <button
           onClick={() => onNavigate('main', '/')}
@@ -117,6 +120,19 @@ export const DomainSwitcher: React.FC<DomainSwitcherProps> = ({
         >
           <BookOpen size={13} className="text-teal-400" />
           <span>Docs</span>
+        </button>
+
+        <button
+          onClick={() => onNavigate('api', '/')}
+          className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1.5 ${
+            currentSurface === 'api'
+              ? 'bg-zinc-800 text-white font-semibold'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+          }`}
+          title="Optic Developer API"
+        >
+          <Key size={13} className="text-amber-400" />
+          <span>API</span>
         </button>
 
         {userEmail && (

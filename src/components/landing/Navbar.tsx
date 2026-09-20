@@ -31,7 +31,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <OpticLogo size={22} showWordmark={true} />
           </button>
 
-          {/* Center Navigation: Cloud, Hosting, Docs, Pricing */}
+          {/* Center Navigation: Cloud, Hosting, Docs, API, Pricing */}
           <nav className="hidden md:flex items-center gap-6 text-xs font-medium text-zinc-400">
             <button
               onClick={() => onNavigateSurface('cloud', '/')}
@@ -50,6 +50,12 @@ export const Navbar: React.FC<NavbarProps> = ({
               className="hover:text-zinc-100 transition-colors"
             >
               Docs
+            </button>
+            <button
+              onClick={() => onNavigateSurface('api', '/')}
+              className="hover:text-zinc-100 transition-colors"
+            >
+              API
             </button>
             <a
               href="#pricing"
@@ -157,6 +163,15 @@ export const Navbar: React.FC<NavbarProps> = ({
               className="p-2 rounded-md hover:bg-zinc-900 text-left font-medium"
             >
               Docs
+            </button>
+            <button
+              onClick={() => {
+                onNavigateSurface('api', '/');
+                setMobileMenuOpen(false);
+              }}
+              className="p-2 rounded-md hover:bg-zinc-900 text-left font-medium"
+            >
+              API
             </button>
             <a
               href="#pricing"

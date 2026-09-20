@@ -4,6 +4,7 @@ export type SurfaceType =
   | 'cloud'
   | 'hosting'
   | 'docs'
+  | 'api'
   | 'settings'
   | 'login'
   | 'signup'

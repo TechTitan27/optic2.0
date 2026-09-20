@@ -10,6 +10,7 @@ import {
   HardDrive,
   Globe,
   Key,
+  Code2,
   BookOpen,
   Settings,
   LogOut,
@@ -114,6 +115,16 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 className={currentTab === 'keys' ? 'text-white' : 'text-zinc-400'}
               />
               <span>API Keys</span>
+            </button>
+
+            <button
+              onClick={() => onNavigateSurface('api', '/')}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 transition-colors"
+            >
+              <div className="flex items-center gap-2.5">
+                <Code2 size={15} className="text-zinc-400" />
+                <span>API</span>
+              </div>
             </button>
 
             <button
@@ -318,6 +329,16 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   >
                     <Key size={15} />
                     <span>API Keys</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      onNavigateSurface('api', '/');
+                      setMobileNavOpen(false);
+                    }}
+                    className="w-full text-left p-2 rounded-lg hover:bg-zinc-900 flex items-center gap-2.5 text-zinc-300"
+                  >
+                    <Key size={15} />
+                    <span>API</span>
                   </button>
                   <button
                     onClick={() => {
