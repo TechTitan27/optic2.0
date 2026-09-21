@@ -5,6 +5,7 @@ import { Input } from '../common/Input';
 import { Badge } from '../common/Badge';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { getUserAvatarUrl } from '../../lib/avatar';
 import {
   User,
   Mail,
@@ -15,6 +16,7 @@ import {
   AlertTriangle,
   RefreshCw,
   Trash2,
+  Sparkles,
 } from 'lucide-react';
 import {
   getActiveAnonKey,
@@ -151,6 +153,28 @@ export const SettingsView: React.FC = () => {
           <CardDescription>Your developer identity across Optic services.</CardDescription>
         </CardHeader>
         <CardContent>
+          {/* Avatar & Identity Banner */}
+          <div className="flex items-center gap-4 p-3.5 mb-4 rounded-xl bg-zinc-950 border border-zinc-800">
+            <img
+              src={getUserAvatarUrl(user)}
+              alt="Developer Avatar"
+              className="w-12 h-12 rounded-xl object-cover border border-zinc-700/80 bg-zinc-800 shadow-md"
+            />
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-white font-sans">
+                  {fullName || 'Optic Developer'}
+                </span>
+                <Badge variant="outline" size="sm">
+                  DiceBear Notionists
+                </Badge>
+              </div>
+              <p className="text-[11px] text-zinc-400">
+                Generated deterministically from your User UUID (<code className="font-mono text-zinc-300">{user?.id?.slice(0, 8) || 'usr_dev'}...</code>).
+              </p>
+            </div>
+          </div>
+
           <form onSubmit={handleSaveProfile} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input

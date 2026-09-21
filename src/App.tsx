@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { OrganizationProvider } from './context/OrganizationContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider } from './context/ToastContext';
 import { SurfaceType } from './types';
@@ -350,7 +351,9 @@ export default function App() {
       <ToastProvider>
         <ThemeProvider>
           <AuthProvider>
-            <MainApp />
+            <OrganizationProvider>
+              <MainApp />
+            </OrganizationProvider>
           </AuthProvider>
         </ThemeProvider>
       </ToastProvider>

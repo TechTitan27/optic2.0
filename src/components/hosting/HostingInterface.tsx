@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../common/Card';
@@ -6,9 +6,13 @@ import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { CodeBlock } from '../common/CodeBlock';
 import { OpticFooter } from '../common/OpticFooter';
+import { OrganizationSwitcher } from '../common/OrganizationSwitcher';
 import { HostingProject, DeploymentItem, DeploymentLog, DomainItem, SurfaceType } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useOrganization } from '../../context/OrganizationContext';
 import { useToast } from '../../context/ToastContext';
+import { supabaseData } from '../../lib/supabaseData';
+import { getUserAvatarUrl, getOrgAvatarUrl } from '../../lib/avatar';
 import {
   Server,
   Plus,
@@ -22,11 +26,12 @@ import {
   ShieldCheck,
   CheckCircle2,
   AlertCircle,
-  Play,
   RotateCw,
-  Layers,
   Code2,
-  Lock,
+  Trash2,
+  Building2,
+  Sparkles,
+  Layers,
 } from 'lucide-react';
 import { OpticLogo } from '../brand/OpticLogo';
 
@@ -36,69 +41,15 @@ interface HostingInterfaceProps {
 
 export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSurface }) => {
   const { user, profile } = useAuth();
+  const { currentOrg, organizations, loading: orgLoading, createOrg, hasOrganizations } = useOrganization();
   const toast = useToast();
-  const activeCreator = profile?.fullName || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'developer';
 
-  // State: projects list
-  const [projects, setProjects] = useState<HostingProject[]>([
-    {
-      id: 'proj_1',
-      name: 'my-portfolio',
-      slug: 'my-portfolio',
-      framework: 'react',
-      productionDomain: 'https://my-portfolio.optic.doy.best',
-      assignedSubdomain: 'my-portfolio.optic.doy.best',
-      customDomains: ['portfolio.devsite.me'],
-      gitRepo: 'optic-developer/portfolio',
-      gitBranch: 'main',
-      status: 'ready',
-      latestDeployment: {
-        id: 'dep_101',
-        projectId: 'proj_1',
-        projectName: 'my-portfolio',
-        status: 'ready',
-        url: 'https://my-portfolio.optic.doy.best',
-        commitHash: '9fa4c10',
-        commitMessage: 'feat: add developer infrastructure case studies',
-        creator: 'optic.dev',
-        branch: 'main',
-        durationSeconds: 14,
-        environment: 'production',
-        createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-      },
-      createdAt: new Date(Date.now() - 86400000 * 10).toISOString(),
-      updatedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-    },
-    {
-      id: 'proj_2',
-      name: 'example-site',
-      slug: 'example-site',
-      framework: 'static',
-      productionDomain: 'https://example-site.optic.doy.best',
-      assignedSubdomain: 'example-site.optic.doy.best',
-      customDomains: [],
-      gitRepo: 'optic-developer/example-site',
-      gitBranch: 'preview',
-      status: 'ready',
-      latestDeployment: {
-        id: 'dep_102',
-        projectId: 'proj_2',
-        projectName: 'example-site',
-        status: 'ready',
-        url: 'https://example-site.optic.doy.best',
-        commitHash: '8b31ea9',
-        commitMessage: 'fix: align navbar spacing for mobile',
-        creator: 'optic.dev',
-        branch: 'preview',
-        durationSeconds: 9,
-        environment: 'preview',
-        createdAt: new Date(Date.now() - 86400000).toISOString(),
-      },
-      createdAt: new Date(Date.now() - 86400000 * 4).toISOString(),
-      updatedAt: new Date(Date.now() - 86400000).toISOString(),
-    },
-  ]);
+  const activeCreator =
+    profile?.fullName || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'developer';
 
+  // State: projects loaded dynamically from Supabase
+  const [projects, setProjects] = useState<HostingProject[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState<boolean>(false);
   const [selectedProject, setSelectedProject] = useState<HostingProject | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'logs' | 'domains' | 'settings'>('overview');
 
@@ -108,164 +59,257 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
   const [newFramework, setNewFramework] = useState<'react' | 'static' | 'astro' | 'nextjs'>('react');
   const [creatingProject, setCreatingProject] = useState(false);
 
-  // New Deployment Trigger
+  // First Visit Org Onboarding form state
+  const [onboardOrgName, setOnboardOrgName] = useState('');
+  const [creatingOnboardOrg, setCreatingOnboardOrg] = useState(false);
+
+  // Deployments
+  const [deploymentsList, setDeploymentsList] = useState<DeploymentItem[]>([]);
+  const [loadingDeployments, setLoadingDeployments] = useState<boolean>(false);
   const [triggerDeploying, setTriggerDeploying] = useState(false);
 
-  // Project Domains
+  // Domains
+  const [projectDomains, setProjectDomains] = useState<DomainItem[]>([]);
+  const [loadingDomains, setLoadingDomains] = useState<boolean>(false);
   const [customDomainInput, setCustomDomainInput] = useState('');
-  const [projectDomains, setProjectDomains] = useState<DomainItem[]>([
-    {
-      id: 'dom_1',
-      projectId: 'proj_1',
-      domain: 'portfolio.devsite.me',
-      status: 'verified',
-      dnsType: 'CNAME',
-      dnsTarget: 'cname.optic.doy.best',
-      sslStatus: 'active',
-      createdAt: new Date(Date.now() - 86400000 * 3).toISOString(),
-    },
-  ]);
+  const [addingDomain, setAddingDomain] = useState(false);
 
-  // Project Deployments History
-  const [deploymentsList, setDeploymentsList] = useState<DeploymentItem[]>([
-    {
-      id: 'dep_101',
-      projectId: 'proj_1',
-      projectName: 'my-portfolio',
-      status: 'ready',
-      url: 'https://my-portfolio.optic.doy.best',
-      commitHash: '9fa4c10',
-      commitMessage: 'feat: add developer infrastructure case studies',
-      creator: 'optic.dev',
-      branch: 'main',
-      durationSeconds: 14,
-      environment: 'production',
-      createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-    },
-    {
-      id: 'dep_100',
-      projectId: 'proj_1',
-      projectName: 'my-portfolio',
-      status: 'ready',
-      url: 'https://dep-100-my-portfolio.optic.doy.best',
-      commitHash: '3c19f2a',
-      commitMessage: 'chore: configure tailwind typography',
-      creator: 'optic.dev',
-      branch: 'main',
-      durationSeconds: 18,
-      environment: 'preview',
-      createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-    },
-  ]);
+  // Deleting project state
+  const [deletingProject, setDeletingProject] = useState(false);
 
-  // Deployment Logs
-  const [logs, setLogs] = useState<DeploymentLog[]>([
-    { id: 'l1', deploymentId: 'dep_101', timestamp: '14:02:01.120', level: 'info', message: 'Received deployment request from CLI token [opt_live_...]' },
-    { id: 'l2', deploymentId: 'dep_101', timestamp: '14:02:02.040', level: 'info', message: 'Cloning repository optic-developer/portfolio (commit 9fa4c10)...' },
-    { id: 'l3', deploymentId: 'dep_101', timestamp: '14:02:04.190', level: 'info', message: 'Running build command: npm run build' },
-    { id: 'l4', deploymentId: 'dep_101', timestamp: '14:02:11.830', level: 'info', message: 'Dist directory generated: 28 static files (1.4 MB total)' },
-    { id: 'l5', deploymentId: 'dep_101', timestamp: '14:02:13.200', level: 'info', message: 'Uploading assets to Optic Edge CDN...' },
-    { id: 'l6', deploymentId: 'dep_101', timestamp: '14:02:15.110', level: 'success', message: 'Deployment complete in 14.02s! Assigned URL: https://my-portfolio.optic.doy.best' },
-  ]);
+  // Fetch projects when currentOrg changes
+  const fetchProjects = useCallback(async () => {
+    if (!currentOrg?.id) {
+      setProjects([]);
+      setSelectedProject(null);
+      return;
+    }
+    setLoadingProjects(true);
+    try {
+      const data = await supabaseData.getHostingProjects(currentOrg.id);
+      setProjects(data);
+      // Keep selectedProject in sync if still present
+      if (selectedProject) {
+        const found = data.find((p) => p.id === selectedProject.id);
+        if (found) setSelectedProject(found);
+      }
+    } catch (err) {
+      console.warn('Error fetching hosting projects:', err);
+    } finally {
+      setLoadingProjects(false);
+    }
+  }, [currentOrg?.id, selectedProject?.id]);
 
-  const handleCreateProject = (e: React.FormEvent) => {
+  useEffect(() => {
+    fetchProjects();
+  }, [currentOrg?.id]);
+
+  // Fetch project deployments and domains when selectedProject changes
+  useEffect(() => {
+    if (!selectedProject || !currentOrg?.id) {
+      setDeploymentsList([]);
+      setProjectDomains([]);
+      return;
+    }
+
+    const loadProjectDetails = async () => {
+      setLoadingDeployments(true);
+      setLoadingDomains(true);
+      try {
+        const [deps, doms] = await Promise.all([
+          supabaseData.getProjectDeployments(selectedProject.id, currentOrg.id),
+          supabaseData.getProjectDomains(selectedProject.id),
+        ]);
+        setDeploymentsList(deps);
+        setProjectDomains(doms);
+      } catch (err) {
+        console.warn('Error loading project details:', err);
+      } finally {
+        setLoadingDeployments(false);
+        setLoadingDomains(false);
+      }
+    };
+
+    loadProjectDetails();
+  }, [selectedProject?.id, currentOrg?.id]);
+
+  // Handler: Create Project
+  const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newProjectName.trim()) return;
+    if (!newProjectName.trim() || !currentOrg) return;
     setCreatingProject(true);
 
-    const slug = newProjectName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-    const newProj: HostingProject = {
-      id: 'proj_' + Math.random().toString(36).substring(2, 9),
-      name: newProjectName.trim(),
-      slug,
-      framework: newFramework,
-      productionDomain: `https://${slug}.optic.doy.best`,
-      assignedSubdomain: `${slug}.optic.doy.best`,
-      customDomains: [],
-      gitBranch: 'main',
-      status: 'ready',
-      latestDeployment: {
-        id: 'dep_' + Math.random().toString(36).substring(2, 8),
-        projectId: 'proj_' + Math.random().toString(36).substring(2, 9),
-        projectName: newProjectName.trim(),
-        status: 'ready',
-        url: `https://${slug}.optic.doy.best`,
-        commitHash: 'init01',
-        commitMessage: 'Initial site deployment',
-        creator: activeCreator,
-        branch: 'main',
-        durationSeconds: 11,
-        environment: 'production',
-        createdAt: new Date().toISOString(),
-      },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    try {
+      const newProj = await supabaseData.createHostingProject(currentOrg.id, {
+        name: newProjectName.trim(),
+        framework: newFramework,
+        creatorName: activeCreator,
+      });
 
-    setProjects([newProj, ...projects]);
-    setNewProjectName('');
-    setCreatingProject(false);
-    setCreateProjectModalOpen(false);
-    setSelectedProject(newProj);
-    toast.success(`Project "${newProj.name}" created successfully.`, 'Hosting Project Ready');
+      setProjects((prev) => [newProj, ...prev]);
+      setNewProjectName('');
+      setCreateProjectModalOpen(false);
+      setSelectedProject(newProj);
+      setActiveTab('overview');
+      toast.success(`Project "${newProj.name}" created under ${currentOrg.name}.`, 'Hosting Project Ready');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to create project', 'Creation Error');
+    } finally {
+      setCreatingProject(false);
+    }
   };
 
-  const handleTriggerDeploy = () => {
-    if (!selectedProject) return;
+  // Handler: Trigger Redeploy
+  const handleTriggerDeploy = async () => {
+    if (!selectedProject || !currentOrg) return;
     setTriggerDeploying(true);
 
-    setTimeout(() => {
-      const newDep: DeploymentItem = {
-        id: 'dep_' + Math.random().toString(36).substring(2, 8),
-        projectId: selectedProject.id,
+    try {
+      const newDep = await supabaseData.createDeployment(selectedProject.id, currentOrg.id, {
         projectName: selectedProject.name,
-        status: 'ready',
-        url: selectedProject.productionDomain,
-        commitHash: Math.random().toString(16).substring(2, 9),
-        commitMessage: 'manual: trigger new production build',
+        commitMessage: 'manual: trigger new production edge build',
         creator: activeCreator,
         branch: selectedProject.gitBranch || 'main',
-        durationSeconds: 12,
         environment: 'production',
-        createdAt: new Date().toISOString(),
-      };
-
-      setDeploymentsList([newDep, ...deploymentsList]);
-      setSelectedProject({
-        ...selectedProject,
-        latestDeployment: newDep,
-        updatedAt: new Date().toISOString(),
+        url: selectedProject.productionDomain,
       });
-      setTriggerDeploying(false);
+
+      setDeploymentsList((prev) => [newDep, ...prev]);
+      setSelectedProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              latestDeployment: newDep,
+              updatedAt: new Date().toISOString(),
+            }
+          : null
+      );
       toast.success('Production build deployed to Edge CDN successfully.', 'Deployment Live');
-    }, 1200);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to trigger deployment', 'Deploy Error');
+    } finally {
+      setTriggerDeploying(false);
+    }
   };
 
-  const handleAddDomain = (e: React.FormEvent) => {
+  // Handler: Add Custom Domain
+  const handleAddDomain = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customDomainInput.trim() || !selectedProject) return;
+    if (!customDomainInput.trim() || !selectedProject || !currentOrg) return;
+    setAddingDomain(true);
 
-    const newDom: DomainItem = {
-      id: 'dom_' + Math.random().toString(36).substring(2, 8),
-      projectId: selectedProject.id,
-      domain: customDomainInput.trim().toLowerCase(),
-      status: 'pending',
-      dnsType: 'CNAME',
-      dnsTarget: 'cname.optic.doy.best',
-      sslStatus: 'pending',
-      createdAt: new Date().toISOString(),
-    };
-
-    setProjectDomains([...projectDomains, newDom]);
-    setCustomDomainInput('');
-    toast.success(`Domain "${newDom.domain}" added. DNS verification initiated.`, 'Domain Added');
+    try {
+      const newDom = await supabaseData.addProjectDomain(
+        selectedProject.id,
+        currentOrg.id,
+        customDomainInput.trim()
+      );
+      setProjectDomains((prev) => [newDom, ...prev]);
+      setCustomDomainInput('');
+      toast.success(`Domain ${newDom.domain} added. Configure CNAME to activate.`, 'Domain Added');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to add domain', 'Domain Error');
+    } finally {
+      setAddingDomain(false);
+    }
   };
+
+  // Handler: Delete Custom Domain
+  const handleDeleteDomain = async (domainId: string) => {
+    if (!selectedProject) return;
+    try {
+      await supabaseData.deleteProjectDomain(domainId, selectedProject.id);
+      setProjectDomains((prev) => prev.filter((d) => d.id !== domainId));
+      toast.info('Custom domain removed.', 'Domain Removed');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to remove domain', 'Delete Error');
+    }
+  };
+
+  // Handler: Delete Project
+  const handleDeleteProject = async () => {
+    if (!selectedProject || !currentOrg) return;
+    const confirm = window.confirm(
+      `Are you sure you want to delete "${selectedProject.name}"? This will tear down all edge deployments.`
+    );
+    if (!confirm) return;
+
+    setDeletingProject(true);
+    try {
+      await supabaseData.deleteHostingProject(selectedProject.id, currentOrg.id);
+      setProjects((prev) => prev.filter((p) => p.id !== selectedProject.id));
+      setSelectedProject(null);
+      toast.info(`Project "${selectedProject.name}" deleted.`, 'Project Deleted');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete project', 'Error');
+    } finally {
+      setDeletingProject(false);
+    }
+  };
+
+  // Handler: First Visit Organization Onboarding
+  const handleOnboardOrgSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onboardOrgName.trim()) return;
+    setCreatingOnboardOrg(true);
+    try {
+      await createOrg(onboardOrgName.trim());
+      setOnboardOrgName('');
+      toast.success('Organization created! You can now launch hosting projects.', 'Welcome to Optic Hosting');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to create organization', 'Error');
+    } finally {
+      setCreatingOnboardOrg(false);
+    }
+  };
+
+  // Dynamic logs generation based on actual deployments
+  const latestDep = deploymentsList[0] || selectedProject?.latestDeployment;
+  const dynamicLogs: DeploymentLog[] = latestDep
+    ? [
+        {
+          id: 'l1',
+          deploymentId: latestDep.id,
+          timestamp: new Date(latestDep.createdAt).toLocaleTimeString(),
+          level: 'info',
+          message: `Received edge deployment for ${selectedProject?.name || 'app'} (${latestDep.id})`,
+        },
+        {
+          id: 'l2',
+          deploymentId: latestDep.id,
+          timestamp: new Date(latestDep.createdAt).toLocaleTimeString(),
+          level: 'info',
+          message: `Triggered by ${latestDep.creator} on branch ${latestDep.branch}`,
+        },
+        {
+          id: 'l3',
+          deploymentId: latestDep.id,
+          timestamp: new Date(latestDep.createdAt).toLocaleTimeString(),
+          level: 'info',
+          message: `Building static assets with ${selectedProject?.framework || 'react'} preset...`,
+        },
+        {
+          id: 'l4',
+          deploymentId: latestDep.id,
+          timestamp: new Date(latestDep.createdAt).toLocaleTimeString(),
+          level: 'info',
+          message: `Assets compiled and synced to Optic Edge CDN (${latestDep.durationSeconds}s)`,
+        },
+        {
+          id: 'l5',
+          deploymentId: latestDep.id,
+          timestamp: new Date(latestDep.createdAt).toLocaleTimeString(),
+          level: 'success',
+          message: `Deployed successfully! Active production URL: ${latestDep.url}`,
+        },
+      ]
+    : [];
 
   return (
     <div className="flex flex-col min-h-screen bg-zinc-950 text-zinc-100 font-sans">
-      {/* Header */}
-      <header className="h-14 border-b border-zinc-800/80 bg-zinc-950 px-4 sm:px-6 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-4">
+      {/* Clean Header */}
+      <header className="sticky top-0 z-30 h-14 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3 sm:gap-4">
           <button
             onClick={() => onNavigateSurface('dashboard', '/dashboard')}
             className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100 text-xs font-medium transition-colors"
@@ -277,22 +321,99 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
           <div className="flex items-center gap-2">
             <OpticLogo size={20} showWordmark={true} surfaceLabel="Hosting" />
           </div>
+
+          {/* Organization Switcher with Glass DiceBear Avatar */}
+          <div className="h-4 w-px bg-zinc-800 hidden sm:block" />
+          <OrganizationSwitcher className="hidden sm:block" />
         </div>
 
-        <Button
-          size="sm"
-          variant="primary"
-          onClick={() => setCreateProjectModalOpen(true)}
-          icon={<Plus size={14} />}
-        >
-          New Project
-        </Button>
+        <div className="flex items-center gap-3">
+          {/* Mobile Organization Switcher */}
+          <div className="sm:hidden">
+            <OrganizationSwitcher compact />
+          </div>
+
+          {/* User profile avatar (Notionists style) */}
+          {user && (
+            <div className="flex items-center gap-2 pl-2 border-l border-zinc-800/80">
+              <img
+                src={getUserAvatarUrl(user)}
+                alt={user.email || 'User'}
+                className="w-6 h-6 rounded-md object-cover border border-zinc-700/80 bg-zinc-800 shrink-0"
+              />
+              <span className="text-xs font-mono text-zinc-400 hidden md:inline truncate max-w-[120px]">
+                {user.email}
+              </span>
+            </div>
+          )}
+
+          {currentOrg && (
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => setCreateProjectModalOpen(true)}
+              icon={<Plus size={14} />}
+              className="text-xs"
+            >
+              New Project
+            </Button>
+          )}
+        </div>
       </header>
 
       {/* Main Body */}
       <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6">
-        {selectedProject ? (
-          /* PROJECT DETAIL VIEW */
+        {/* CASE 1: USER HAS NO ORGANIZATIONS ON FIRST VISIT */}
+        {!orgLoading && !hasOrganizations ? (
+          <div className="max-w-xl mx-auto py-12 px-4 text-center space-y-6">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-950/60 border border-indigo-800/60 mx-auto flex items-center justify-center text-indigo-400 shadow-xl shadow-indigo-950/30">
+              <Building2 size={28} />
+            </div>
+
+            <div className="space-y-2">
+              <h1 className="text-2xl font-bold tracking-tight text-white">
+                Create Your Organization
+              </h1>
+              <p className="text-sm text-zinc-400 leading-relaxed">
+                Hosting projects on Optic belong to organizations. This allows you to manage deployments, custom domains, and collaborate with your team.
+              </p>
+            </div>
+
+            <Card className="p-6 text-left border-zinc-800 bg-zinc-900/50 backdrop-blur-sm">
+              <form onSubmit={handleOnboardOrgSubmit} className="space-y-4">
+                <Input
+                  label="Organization Name"
+                  placeholder="e.g. Acme Studio or Personal"
+                  value={onboardOrgName}
+                  onChange={(e) => setOnboardOrgName(e.target.value)}
+                  required
+                  autoFocus
+                />
+
+                <div className="p-3.5 rounded-lg bg-zinc-900/90 border border-zinc-800 text-xs text-zinc-400 space-y-1.5">
+                  <div className="flex items-center gap-2 text-zinc-200 font-medium">
+                    <Sparkles size={14} className="text-amber-400" />
+                    <span>Deterministic Glass Avatar:</span>
+                  </div>
+                  <p>
+                    A unique, high-contrast DiceBear glass visual avatar is generated dynamically for your organization from its UUID.
+                  </p>
+                </div>
+
+                <Button
+                  type="submit"
+                  variant="primary"
+                  className="w-full justify-center"
+                  loading={creatingOnboardOrg}
+                  disabled={!onboardOrgName.trim()}
+                >
+                  Create Organization & Continue
+                </Button>
+              </form>
+            </Card>
+          </div>
+        ) : selectedProject ? (
+          /* CASE 2: PROJECT DETAIL VIEW */
           <div className="space-y-6">
             {/* Back button & Project Title */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-800">
@@ -310,7 +431,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
                       {selectedProject.name}
                     </h1>
                     <Badge variant="success" dot size="sm">
-                      Ready
+                      {selectedProject.status}
                     </Badge>
                   </div>
                   <a
@@ -345,9 +466,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
                   key={tab}
                   onClick={() => setActiveTab(tab)}
                   className={`pb-3 capitalize transition-colors relative ${
-                    activeTab === tab
-                      ? 'text-white font-semibold'
-                      : 'text-zinc-400 hover:text-zinc-200'
+                    activeTab === tab ? 'text-white font-semibold' : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
                   {tab}
@@ -358,10 +477,10 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
               ))}
             </div>
 
-            {/* TAB CONTENT */}
+            {/* TAB: OVERVIEW */}
             {activeTab === 'overview' && (
               <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <Card className="p-4">
                     <span className="text-[11px] font-mono text-zinc-500 uppercase">Framework</span>
                     <p className="text-sm font-semibold text-zinc-100 capitalize mt-1">
@@ -369,16 +488,16 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
                     </p>
                   </Card>
                   <Card className="p-4">
-                    <span className="text-[11px] font-mono text-zinc-500 uppercase">Branch</span>
+                    <span className="text-[11px] font-mono text-zinc-500 uppercase">Git Branch</span>
                     <p className="text-sm font-semibold text-zinc-100 flex items-center gap-1.5 mt-1 font-mono">
                       <GitBranch size={14} className="text-sky-400" />
                       {selectedProject.gitBranch || 'main'}
                     </p>
                   </Card>
                   <Card className="p-4">
-                    <span className="text-[11px] font-mono text-zinc-500 uppercase">Build Duration</span>
-                    <p className="text-sm font-semibold text-zinc-100 mt-1 font-mono">
-                      {selectedProject.latestDeployment?.durationSeconds || 14} seconds
+                    <span className="text-[11px] font-mono text-zinc-500 uppercase">Organization</span>
+                    <p className="text-sm font-semibold text-zinc-100 mt-1 truncate">
+                      {currentOrg?.name}
                     </p>
                   </Card>
                 </div>
@@ -398,97 +517,119 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
               </div>
             )}
 
+            {/* TAB: DEPLOYMENTS */}
             {activeTab === 'deployments' && (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">Deployment History</CardTitle>
-                  <CardDescription>Previous builds and releases</CardDescription>
+                  <CardDescription>Live releases and build status</CardDescription>
                 </CardHeader>
                 <CardContent className="p-0">
-                  <div className="divide-y divide-zinc-800/60 font-mono text-xs">
-                    {deploymentsList.map((dep) => (
-                      <div
-                        key={dep.id}
-                        className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-zinc-900/40"
-                      >
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                            <span className="font-semibold text-zinc-100 font-sans">
-                              {dep.commitMessage}
-                            </span>
-                            <Badge variant={dep.environment === 'production' ? 'info' : 'outline'} size="sm">
-                              {dep.environment}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-3 text-zinc-500 text-[11px] mt-1.5">
-                            <span>commit {dep.commitHash}</span>
-                            <span>·</span>
-                            <span>{dep.branch}</span>
-                            <span>·</span>
-                            <span>{dep.durationSeconds}s</span>
-                            <span>·</span>
-                            <span>{new Date(dep.createdAt).toLocaleString()}</span>
-                          </div>
-                        </div>
-
-                        <a
-                          href={dep.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-indigo-400 hover:text-indigo-300 text-xs flex items-center gap-1 font-sans font-medium"
+                  {loadingDeployments ? (
+                    <div className="p-8 text-center text-xs text-zinc-500">Loading deployments...</div>
+                  ) : deploymentsList.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-zinc-500">
+                      No deployments recorded for this project yet. Trigger a redeploy above.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-zinc-800/60 font-mono text-xs">
+                      {deploymentsList.map((dep) => (
+                        <div
+                          key={dep.id}
+                          className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-zinc-900/40"
                         >
-                          <span>Visit URL</span>
-                          <ExternalLink size={12} />
-                        </a>
-                      </div>
-                    ))}
-                  </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                              <span className="font-semibold text-zinc-100 font-sans">
+                                {dep.commitMessage}
+                              </span>
+                              <Badge
+                                variant={dep.environment === 'production' ? 'info' : 'outline'}
+                                size="sm"
+                              >
+                                {dep.environment}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-3 text-zinc-500 text-[11px] mt-1.5">
+                              <span>commit {dep.commitHash}</span>
+                              <span>·</span>
+                              <span>{dep.branch}</span>
+                              <span>·</span>
+                              <span>{dep.durationSeconds}s</span>
+                              <span>·</span>
+                              <span>{new Date(dep.createdAt).toLocaleString()}</span>
+                            </div>
+                          </div>
+
+                          <a
+                            href={dep.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-indigo-400 hover:text-indigo-300 text-xs flex items-center gap-1 font-sans font-medium"
+                          >
+                            <span>Visit URL</span>
+                            <ExternalLink size={12} />
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
 
+            {/* TAB: LOGS */}
             {activeTab === 'logs' && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-xs text-zinc-400">
                   <div className="flex items-center gap-2 font-mono">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Build Worker Stream: dep_101</span>
+                    <span>Build Stream: {latestDep?.id || 'idle'}</span>
                   </div>
-                  <span className="font-mono text-zinc-500 text-[11px]">Worker node: ldn-edge-02</span>
+                  <span className="font-mono text-zinc-500 text-[11px]">Region: global-edge</span>
                 </div>
 
                 <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs text-zinc-300 space-y-1.5 overflow-x-auto shadow-inner">
-                  {logs.map((log) => (
-                    <div key={log.id} className="flex items-start gap-3">
-                      <span className="text-zinc-600 select-none text-[11px]">{log.timestamp}</span>
-                      <span
-                        className={`text-[10px] px-1 rounded uppercase font-bold select-none ${
-                          log.level === 'success'
-                            ? 'bg-emerald-500/20 text-emerald-400'
-                            : log.level === 'warn'
-                            ? 'bg-amber-500/20 text-amber-400'
-                            : 'bg-zinc-800 text-zinc-400'
-                        }`}
-                      >
-                        {log.level}
-                      </span>
-                      <span className={log.level === 'success' ? 'text-emerald-300 font-semibold' : 'text-zinc-200'}>
-                        {log.message}
-                      </span>
-                    </div>
-                  ))}
+                  {dynamicLogs.length > 0 ? (
+                    dynamicLogs.map((log) => (
+                      <div key={log.id} className="flex items-start gap-3">
+                        <span className="text-zinc-600 select-none text-[11px]">{log.timestamp}</span>
+                        <span
+                          className={`text-[10px] px-1 rounded uppercase font-bold select-none ${
+                            log.level === 'success'
+                              ? 'bg-emerald-500/20 text-emerald-400'
+                              : log.level === 'warn'
+                              ? 'bg-amber-500/20 text-amber-400'
+                              : 'bg-zinc-800 text-zinc-400'
+                          }`}
+                        >
+                          {log.level}
+                        </span>
+                        <span
+                          className={
+                            log.level === 'success' ? 'text-emerald-300 font-semibold' : 'text-zinc-200'
+                          }
+                        >
+                          {log.message}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-zinc-500 text-center py-4">No build logs available.</div>
+                  )}
                 </div>
               </div>
             )}
 
+            {/* TAB: DOMAINS */}
             {activeTab === 'domains' && (
               <div className="space-y-6">
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-sm">Custom Domains</CardTitle>
                     <CardDescription>
-                      Point your own domains to this deployment with automatic SSL certificate issuance.
+                      Point your custom domain to this deployment with automated SSL certificate provisioning.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -498,77 +639,120 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
                         value={customDomainInput}
                         onChange={(e) => setCustomDomainInput(e.target.value)}
                         className="flex-1"
+                        required
                       />
-                      <Button type="submit" variant="primary" size="sm">
+                      <Button type="submit" variant="primary" size="sm" loading={addingDomain}>
                         Add Domain
                       </Button>
                     </form>
 
-                    <div className="divide-y divide-zinc-800/80 font-mono text-xs pt-2">
-                      {projectDomains.map((dom) => (
-                        <div
-                          key={dom.id}
-                          className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                        >
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <Globe size={14} className="text-indigo-400" />
-                              <span className="text-zinc-100 font-semibold">{dom.domain}</span>
-                              <Badge
-                                variant={dom.status === 'verified' ? 'success' : 'warning'}
-                                size="sm"
-                                dot
-                              >
-                                {dom.status}
-                              </Badge>
+                    {loadingDomains ? (
+                      <div className="py-4 text-center text-xs text-zinc-500">Loading domains...</div>
+                    ) : projectDomains.length === 0 ? (
+                      <div className="py-4 text-center text-xs text-zinc-500">
+                        No custom domains configured yet for this project.
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-zinc-800/80 font-mono text-xs pt-2">
+                        {projectDomains.map((dom) => (
+                          <div
+                            key={dom.id}
+                            className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                          >
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <Globe size={14} className="text-indigo-400" />
+                                <span className="text-zinc-100 font-semibold">{dom.domain}</span>
+                                <Badge
+                                  variant={dom.status === 'verified' ? 'success' : 'warning'}
+                                  size="sm"
+                                  dot
+                                >
+                                  {dom.status}
+                                </Badge>
+                              </div>
+                              <span className="text-[11px] text-zinc-500 mt-1 block">
+                                DNS Record: CNAME pointing to <code className="text-zinc-300">{dom.dnsTarget}</code>
+                              </span>
                             </div>
-                            <span className="text-[11px] text-zinc-500 mt-1 block">
-                              DNS Record: CNAME pointing to <code className="text-zinc-300">{dom.dnsTarget}</code>
-                            </span>
-                          </div>
 
-                          <div className="flex items-center gap-2">
-                            <Badge variant="info" size="sm">
-                              SSL Active
-                            </Badge>
+                            <div className="flex items-center gap-3">
+                              <Badge variant="info" size="sm">
+                                SSL Active
+                              </Badge>
+                              <button
+                                onClick={() => handleDeleteDomain(dom.id)}
+                                className="text-zinc-500 hover:text-red-400 p-1 rounded transition-colors"
+                                title="Remove domain"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </div>
             )}
 
+            {/* TAB: SETTINGS */}
             {activeTab === 'settings' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm">Project Settings</CardTitle>
-                  <CardDescription>Configure build commands and directories</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <Input label="Project Name" value={selectedProject.name} disabled />
-                  <Input label="Build Command" defaultValue="npm run build" />
-                  <Input label="Output Directory" defaultValue="dist" />
-                  <div className="pt-2">
-                    <Button variant="primary" size="sm">
-                      Save Settings
+              <div className="space-y-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm">Project Details</CardTitle>
+                    <CardDescription>Configuration and identifiers</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <Input label="Project Name" value={selectedProject.name} disabled />
+                    <Input label="Assigned Subdomain" value={selectedProject.assignedSubdomain} disabled />
+                    <Input label="Production URL" value={selectedProject.productionDomain} disabled />
+                  </CardContent>
+                </Card>
+
+                <Card className="border-red-900/40 bg-red-950/10">
+                  <CardHeader>
+                    <CardTitle className="text-sm text-red-400">Danger Zone</CardTitle>
+                    <CardDescription>Delete this hosting project and all associated deployments.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      onClick={handleDeleteProject}
+                      loading={deletingProject}
+                      icon={<Trash2 size={14} />}
+                    >
+                      Delete Project
                     </Button>
-                  </div>
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+              </div>
             )}
           </div>
         ) : (
-          /* ALL PROJECTS LIST */
+          /* CASE 3: ALL PROJECTS LIST (SCOPED TO CURRENT ORGANIZATION) */
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h1 className="text-xl font-bold tracking-tight text-white">Hosting Projects</h1>
-                <p className="text-xs text-zinc-400 mt-1">
-                  Static sites, React, and frontend applications distributed across global CDN nodes.
-                </p>
+              <div className="flex items-center gap-3">
+                <img
+                  src={getOrgAvatarUrl(currentOrg)}
+                  alt={currentOrg?.name || 'Organization'}
+                  className="w-10 h-10 rounded-xl object-cover border border-zinc-700/80 bg-zinc-800 shadow-md"
+                />
+                <div>
+                  <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                    <span>{currentOrg?.name}</span>
+                    <span className="text-xs font-mono text-zinc-500 font-normal">({currentOrg?.slug})</span>
+                  </h1>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Hosting projects and deployments scoped to this organization.
+                  </p>
+                </div>
               </div>
+
               <Button
                 size="sm"
                 variant="primary"
@@ -580,65 +764,91 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
             </div>
 
             {/* Projects Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {projects.map((proj) => (
-                <Card
-                  key={proj.id}
-                  hoverEffect
-                  className="p-5 cursor-pointer flex flex-col justify-between"
-                  onClick={() => {
-                    setSelectedProject(proj);
-                    setActiveTab('overview');
-                  }}
+            {loadingProjects ? (
+              <div className="py-16 text-center text-xs text-zinc-500">
+                Loading organization projects...
+              </div>
+            ) : projects.length === 0 ? (
+              <div className="p-12 text-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/30 space-y-4">
+                <div className="w-12 h-12 rounded-xl bg-zinc-800/80 text-zinc-400 mx-auto flex items-center justify-center">
+                  <Server size={22} />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-semibold text-zinc-200">No hosting projects yet</h3>
+                  <p className="text-xs text-zinc-400 max-w-sm mx-auto">
+                    Create your first frontend project under <span className="text-zinc-300 font-medium">{currentOrg?.name}</span> to deploy to Optic's Edge network.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => setCreateProjectModalOpen(true)}
+                  icon={<Plus size={14} />}
                 >
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-indigo-950 border border-indigo-800/50 flex items-center justify-center text-indigo-400">
-                          <Server size={16} />
+                  Create Project
+                </Button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {projects.map((proj) => (
+                  <Card
+                    key={proj.id}
+                    hoverEffect
+                    className="p-5 cursor-pointer flex flex-col justify-between"
+                    onClick={() => {
+                      setSelectedProject(proj);
+                      setActiveTab('overview');
+                    }}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-indigo-950 border border-indigo-800/50 flex items-center justify-center text-indigo-400">
+                            <Server size={16} />
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-semibold text-white">{proj.name}</h3>
+                            <span className="text-[11px] font-mono text-zinc-500">
+                              {proj.assignedSubdomain}
+                            </span>
+                          </div>
                         </div>
-                        <div>
-                          <h3 className="text-sm font-semibold text-white">{proj.name}</h3>
-                          <span className="text-[11px] font-mono text-zinc-500">
-                            {proj.assignedSubdomain}
-                          </span>
+                        <Badge variant="success" dot size="sm">
+                          {proj.status}
+                        </Badge>
+                      </div>
+
+                      <div className="space-y-1.5 text-xs text-zinc-400 font-mono mt-4">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-zinc-500">FRAMEWORK:</span>
+                          <span className="capitalize text-zinc-300">{proj.framework}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-zinc-500">BRANCH:</span>
+                          <span className="text-zinc-300">{proj.gitBranch || 'main'}</span>
                         </div>
                       </div>
-                      <Badge variant="success" dot size="sm">
-                        Ready
-                      </Badge>
                     </div>
 
-                    <div className="space-y-1.5 text-xs text-zinc-400 font-mono mt-4">
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-zinc-500">FRAMEWORK:</span>
-                        <span className="capitalize text-zinc-300">{proj.framework}</span>
-                      </div>
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-zinc-500">LATEST COMMIT:</span>
-                        <span className="text-zinc-300">{proj.latestDeployment?.commitHash || 'main'}</span>
-                      </div>
+                    <div className="mt-5 pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs">
+                      <span className="text-[11px] text-zinc-500">
+                        Updated {new Date(proj.updatedAt).toLocaleDateString()}
+                      </span>
+                      <span className="text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1">
+                        <span>Manage</span>
+                        <ExternalLink size={12} />
+                      </span>
                     </div>
-                  </div>
-
-                  <div className="mt-5 pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs">
-                    <span className="text-[11px] text-zinc-500">
-                      Updated {new Date(proj.updatedAt).toLocaleDateString()}
-                    </span>
-                    <span className="text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1">
-                      <span>Manage</span>
-                      <ExternalLink size={12} />
-                    </span>
-                  </div>
-                </Card>
-              ))}
-            </div>
+                  </Card>
+                ))}
+              </div>
+            )}
 
             {/* Architecture note */}
             <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/30 text-xs text-zinc-400 flex items-start gap-3">
               <Code2 size={18} className="text-indigo-400 shrink-0 mt-0.5" />
               <div className="leading-relaxed">
-                <strong className="text-zinc-200">Deploy via API:</strong> You can also deploy programmatically by POSTing your build tarball directly to <code className="text-zinc-200 font-mono">https://api.optic.doy.best/v1/deployments</code> using your Optic API Key.
+                <strong className="text-zinc-200">Deploy via Optic CLI:</strong> Run <code className="text-zinc-200 font-mono">npx optic deploy ./dist</code> with your Optic API token to deploy static assets directly into <span className="text-zinc-200 font-medium">{currentOrg?.name}</span>.
               </div>
             </div>
           </div>
@@ -652,7 +862,7 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
         isOpen={createProjectModalOpen}
         onClose={() => setCreateProjectModalOpen(false)}
         title="Create New Hosting Project"
-        description="Set up an Optic Hosting project for instant static and frontend deployments."
+        description={`Add a hosting project under organization "${currentOrg?.name || 'My Organization'}".`}
       >
         <form onSubmit={handleCreateProject} className="space-y-4">
           <Input
@@ -662,7 +872,7 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
             onChange={(e) => setNewProjectName(e.target.value)}
             required
             autoFocus
-            hint="Assigned domain will be [name].optic.doy.best"
+            hint="Subdomain will be [slug].optic.doy.best"
           />
 
           <div className="space-y-1.5">
@@ -689,6 +899,7 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
             <Button
               type="button"
               variant="ghost"
+              size="sm"
               onClick={() => setCreateProjectModalOpen(false)}
             >
               Cancel
@@ -696,7 +907,9 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
             <Button
               type="submit"
               variant="primary"
+              size="sm"
               loading={creatingProject}
+              disabled={!newProjectName.trim()}
             >
               Create Project
             </Button>

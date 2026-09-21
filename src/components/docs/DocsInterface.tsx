@@ -188,30 +188,6 @@ export const DocsInterface: React.FC<DocsInterfaceProps> = ({ onNavigateSurface 
         <div className="flex items-center gap-3">
           <Button
             size="sm"
-            variant="ghost"
-            onClick={() => onNavigateSurface('cloud', '/')}
-            className="text-xs text-zinc-400 hidden sm:inline-flex"
-          >
-            Cloud
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => onNavigateSurface('hosting', '/')}
-            className="text-xs text-zinc-400 hidden sm:inline-flex"
-          >
-            Hosting
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => onNavigateSurface('api', '/')}
-            className="text-xs text-zinc-400 hidden sm:inline-flex"
-          >
-            API
-          </Button>
-          <Button
-            size="sm"
             variant="outline"
             onClick={() => onNavigateSurface('main', '/')}
             className="text-xs"

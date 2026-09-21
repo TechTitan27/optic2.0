@@ -66,8 +66,28 @@ export interface FolderItem {
   createdAt: string;
 }
 
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  created_by: string;
+  created_at: string;
+  avatarUrl?: string;
+  role?: 'owner' | 'admin' | 'member';
+}
+
+export interface OrganizationMember {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  role: 'owner' | 'admin' | 'member';
+  created_at: string;
+  user?: UserProfile;
+}
+
 export interface HostingProject {
   id: string;
+  organization_id: string;
   name: string;
   slug: string;
   framework: 'static' | 'react' | 'vite' | 'nextjs' | 'astro' | 'html';

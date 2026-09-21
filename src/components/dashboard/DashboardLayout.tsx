@@ -4,6 +4,8 @@ import { OpticFooter } from '../common/OpticFooter';
 import { Button } from '../common/Button';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { useAuth } from '../../context/AuthContext';
+import { getUserAvatarUrl } from '../../lib/avatar';
+import { OrganizationSwitcher } from '../common/OrganizationSwitcher';
 import { SurfaceType } from '../../types';
 import {
   LayoutDashboard,
@@ -53,6 +55,14 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
         {/* Sidebar Nav */}
         <div className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+          {/* Organization Switcher */}
+          <div>
+            <span className="px-1 text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-semibold block mb-1.5">
+              ORGANIZATION
+            </span>
+            <OrganizationSwitcher />
+          </div>
+
           {/* Overview */}
           <div>
             <button
@@ -164,9 +174,11 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         <div className="p-3 border-t border-zinc-800 bg-zinc-950 space-y-2.5">
           <div className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
             <div className="flex items-center gap-2 overflow-hidden">
-              <div className="w-6 h-6 rounded-md bg-zinc-800 border border-zinc-700/80 flex items-center justify-center shrink-0 text-zinc-300 text-xs">
-                <User size={13} />
-              </div>
+              <img
+                src={getUserAvatarUrl(user)}
+                alt={user?.email || 'User'}
+                className="w-6 h-6 rounded-md object-cover border border-zinc-700/80 shrink-0 bg-zinc-800"
+              />
               <div className="overflow-hidden">
                 <p className="text-[11px] font-medium text-zinc-200 truncate">
                   {profile?.fullName || user?.email?.split('@')[0] || 'developer'}

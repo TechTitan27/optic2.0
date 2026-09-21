@@ -1,5 +1,14 @@
 import { getSupabase } from './supabaseClient';
-import { FileItem, FolderItem, UsageStats } from '../types';
+import {
+  FileItem,
+  FolderItem,
+  UsageStats,
+  Organization,
+  OrganizationMember,
+  HostingProject,
+  DeploymentItem,
+  DomainItem,
+} from '../types';
 
 export interface FileRecordInput {
   name: string;
@@ -416,4 +425,604 @@ export const supabaseData = {
       expiresAt: data.expires_at || expiresAt,
     };
   },
+
+  // ==========================================
+  // ORGANIZATIONS & HOSTING DATA OPERATIONS
+  // ==========================================
+
+  /**
+   * Get all organizations that the user belongs to.
+   * Checks `organization_members` joined with `organizations`.
+   */
+  async getUserOrganizations(userId: string): Promise<Organization[]> {
+    const sb = getSupabase();
+    if (!sb || !userId) return [];
+
+    try {
+      // 1. Fetch organization memberships for this user
+      const { data: memberRows, error: memberErr } = await sb
+        .from('organization_members')
+        .select('organization_id, role, organizations (*)')
+        .eq('user_id', userId);
+
+      if (!memberErr && memberRows && memberRows.length > 0) {
+        return memberRows
+          .filter((m: any) => m.organizations)
+          .map((m: any) => ({
+            id: m.organizations.id,
+            name: m.organizations.name,
+            slug: m.organizations.slug,
+            created_by: m.organizations.created_by,
+            created_at: m.organizations.created_at,
+            role: m.role || 'member',
+          }));
+      }
+
+      // If join syntax varies or returns flat, try querying organizations directly
+      const { data: directOrgs, error: orgErr } = await sb
+        .from('organizations')
+        .select('*')
+        .eq('created_by', userId);
+
+      if (!orgErr && directOrgs && directOrgs.length > 0) {
+        return directOrgs.map((o: any) => ({
+          id: o.id,
+          name: o.name,
+          slug: o.slug,
+          created_by: o.created_by,
+          created_at: o.created_at,
+          role: 'owner',
+        }));
+      }
+    } catch (err) {
+      console.warn('Supabase organizations fetch notice:', err);
+    }
+
+    // Fallback to locally stored real organizations if table is being created
+    try {
+      const key = `optic_orgs_${userId}`;
+      const local = localStorage.getItem(key);
+      if (local) {
+        return JSON.parse(local);
+      }
+    } catch {
+      // ignore
+    }
+
+    return [];
+  },
+
+  /**
+   * Create a new organization.
+   * Creator automatically becomes 'owner'.
+   */
+  async createOrganization(userId: string, name: string, customSlug?: string): Promise<Organization> {
+    const sb = getSupabase();
+    const cleanName = name.trim();
+    const baseSlug = (customSlug || cleanName)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || 'org';
+    const slug = `${baseSlug}-${Math.random().toString(36).substring(2, 6)}`;
+
+    let newOrg: Organization | null = null;
+
+    if (sb) {
+      try {
+        const { data: orgData, error: orgErr } = await sb
+          .from('organizations')
+          .insert({
+            name: cleanName,
+            slug,
+            created_by: userId,
+          })
+          .select()
+          .single();
+
+        if (!orgErr && orgData) {
+          // Add creator as owner in organization_members
+          try {
+            await sb.from('organization_members').insert({
+              organization_id: orgData.id,
+              user_id: userId,
+              role: 'owner',
+            });
+          } catch (memErr) {
+            console.warn('Membership insert warning:', memErr);
+          }
+
+          newOrg = {
+            id: orgData.id,
+            name: orgData.name,
+            slug: orgData.slug,
+            created_by: orgData.created_by,
+            created_at: orgData.created_at,
+            role: 'owner',
+          };
+        }
+      } catch (err) {
+        console.warn('Supabase organization create fallback:', err);
+      }
+    }
+
+    if (!newOrg) {
+      // Client-side fallback if table is not yet migrated in Supabase
+      const generatedId = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `org_${Math.random().toString(36).substring(2, 10)}`;
+
+      newOrg = {
+        id: generatedId,
+        name: cleanName,
+        slug,
+        created_by: userId,
+        created_at: new Date().toISOString(),
+        role: 'owner',
+      };
+    }
+
+    // Sync to local user storage
+    try {
+      const key = `optic_orgs_${userId}`;
+      const existing = JSON.parse(localStorage.getItem(key) || '[]');
+      existing.unshift(newOrg);
+      localStorage.setItem(key, JSON.stringify(existing));
+    } catch {
+      // ignore
+    }
+
+    return newOrg;
+  },
+
+  /**
+   * Get all hosting projects belonging to an organization.
+   */
+  async getHostingProjects(orgId: string): Promise<HostingProject[]> {
+    const sb = getSupabase();
+    if (!sb || !orgId) return [];
+
+    try {
+      const { data, error } = await sb
+        .from('hosting_projects')
+        .select('*')
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        return data.map((p: any) => ({
+          id: p.id,
+          organization_id: p.organization_id || orgId,
+          name: p.name,
+          slug: p.slug,
+          framework: p.framework || 'react',
+          productionDomain: p.production_domain || `https://${p.slug}.optic.doy.best`,
+          assignedSubdomain: p.assigned_subdomain || `${p.slug}.optic.doy.best`,
+          customDomains: p.custom_domains || [],
+          gitRepo: p.git_repo || undefined,
+          gitBranch: p.git_branch || 'main',
+          status: p.status || 'ready',
+          createdAt: p.created_at || new Date().toISOString(),
+          updatedAt: p.updated_at || new Date().toISOString(),
+        }));
+      }
+    } catch (err) {
+      console.warn('Hosting projects fetch notice:', err);
+    }
+
+    // Local fallback per organization
+    try {
+      const key = `optic_projects_${orgId}`;
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch {
+      // ignore
+    }
+
+    return [];
+  },
+
+  /**
+   * Create a new hosting project under an organization.
+   */
+  async createHostingProject(
+    orgId: string,
+    input: {
+      name: string;
+      framework: 'static' | 'react' | 'vite' | 'nextjs' | 'astro' | 'html';
+      gitRepo?: string;
+      gitBranch?: string;
+      creatorName?: string;
+    }
+  ): Promise<HostingProject> {
+    const sb = getSupabase();
+    const cleanName = input.name.trim();
+    const slug = cleanName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || `app-${Math.random().toString(36).substring(2, 6)}`;
+    const subdomain = `${slug}.optic.doy.best`;
+    const productionDomain = `https://${subdomain}`;
+
+    let newProject: HostingProject | null = null;
+
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from('hosting_projects')
+          .insert({
+            organization_id: orgId,
+            name: cleanName,
+            slug,
+            framework: input.framework,
+            production_domain: productionDomain,
+            assigned_subdomain: subdomain,
+            custom_domains: [],
+            git_repo: input.gitRepo || null,
+            git_branch: input.gitBranch || 'main',
+            status: 'ready',
+          })
+          .select()
+          .single();
+
+        if (!error && data) {
+          newProject = {
+            id: data.id,
+            organization_id: data.organization_id || orgId,
+            name: data.name,
+            slug: data.slug,
+            framework: data.framework,
+            productionDomain: data.production_domain || productionDomain,
+            assignedSubdomain: data.assigned_subdomain || subdomain,
+            customDomains: data.custom_domains || [],
+            gitRepo: data.git_repo || undefined,
+            gitBranch: data.git_branch || 'main',
+            status: data.status || 'ready',
+            createdAt: data.created_at,
+            updatedAt: data.updated_at,
+          };
+        }
+      } catch (err) {
+        console.warn('Supabase project creation fallback:', err);
+      }
+    }
+
+    if (!newProject) {
+      const generatedId = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `proj_${Math.random().toString(36).substring(2, 10)}`;
+
+      newProject = {
+        id: generatedId,
+        organization_id: orgId,
+        name: cleanName,
+        slug,
+        framework: input.framework,
+        productionDomain,
+        assignedSubdomain: subdomain,
+        customDomains: [],
+        gitRepo: input.gitRepo,
+        gitBranch: input.gitBranch || 'main',
+        status: 'ready',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    // Also automatically create the initial deployment record
+    try {
+      await this.createDeployment(newProject.id, orgId, {
+        projectName: newProject.name,
+        commitMessage: 'Initial project setup & deployment',
+        creator: input.creatorName || 'developer',
+        branch: input.gitBranch || 'main',
+        environment: 'production',
+        url: newProject.productionDomain,
+      });
+    } catch {
+      // ignore
+    }
+
+    // Sync to local org cache
+    try {
+      const key = `optic_projects_${orgId}`;
+      const existing = JSON.parse(localStorage.getItem(key) || '[]');
+      existing.unshift(newProject);
+      localStorage.setItem(key, JSON.stringify(existing));
+    } catch {
+      // ignore
+    }
+
+    return newProject;
+  },
+
+  /**
+   * Delete hosting project
+   */
+  async deleteHostingProject(projectId: string, orgId: string): Promise<void> {
+    const sb = getSupabase();
+    if (sb) {
+      try {
+        await sb.from('hosting_projects').delete().eq('id', projectId);
+      } catch (err) {
+        console.warn('Error deleting project in Supabase:', err);
+      }
+    }
+    try {
+      const key = `optic_projects_${orgId}`;
+      const existing: HostingProject[] = JSON.parse(localStorage.getItem(key) || '[]');
+      const filtered = existing.filter((p) => p.id !== projectId);
+      localStorage.setItem(key, JSON.stringify(filtered));
+    } catch {
+      // ignore
+    }
+  },
+
+  /**
+   * Get deployments for a project.
+   */
+  async getProjectDeployments(projectId: string, orgId?: string): Promise<DeploymentItem[]> {
+    const sb = getSupabase();
+    if (sb && projectId) {
+      try {
+        const { data, error } = await sb
+          .from('hosting_deployments')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('created_at', { ascending: false });
+
+        if (!error && data) {
+          return data.map((d: any) => ({
+            id: d.id,
+            projectId: d.project_id,
+            projectName: d.project_name || 'project',
+            status: d.status || 'ready',
+            url: d.url,
+            commitHash: d.commit_hash || 'HEAD',
+            commitMessage: d.commit_message || 'Deployment update',
+            creator: d.creator || 'developer',
+            branch: d.branch || 'main',
+            durationSeconds: d.duration_seconds || 12,
+            environment: d.environment || 'production',
+            createdAt: d.created_at,
+          }));
+        }
+      } catch (err) {
+        console.warn('Deployments fetch notice:', err);
+      }
+    }
+
+    try {
+      const key = `optic_deployments_${projectId}`;
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch {
+      // ignore
+    }
+
+    return [];
+  },
+
+  /**
+   * Create a new deployment for a project.
+   */
+  async createDeployment(
+    projectId: string,
+    orgId: string,
+    input: Partial<DeploymentItem>
+  ): Promise<DeploymentItem> {
+    const sb = getSupabase();
+    const commitHash = input.commitHash || Math.random().toString(16).substring(2, 9);
+    const duration = input.durationSeconds || Math.floor(8 + Math.random() * 8);
+
+    let newDep: DeploymentItem | null = null;
+
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from('hosting_deployments')
+          .insert({
+            project_id: projectId,
+            organization_id: orgId,
+            status: input.status || 'ready',
+            url: input.url || `https://app.optic.doy.best`,
+            commit_hash: commitHash,
+            commit_message: input.commitMessage || 'Manual deployment',
+            creator: input.creator || 'developer',
+            branch: input.branch || 'main',
+            duration_seconds: duration,
+            environment: input.environment || 'production',
+          })
+          .select()
+          .single();
+
+        if (!error && data) {
+          newDep = {
+            id: data.id,
+            projectId: data.project_id,
+            projectName: input.projectName || 'project',
+            status: data.status,
+            url: data.url,
+            commitHash: data.commit_hash,
+            commitMessage: data.commit_message,
+            creator: data.creator,
+            branch: data.branch,
+            durationSeconds: data.duration_seconds,
+            environment: data.environment,
+            createdAt: data.created_at,
+          };
+        }
+      } catch (err) {
+        console.warn('Deployment insert notice:', err);
+      }
+    }
+
+    if (!newDep) {
+      newDep = {
+        id: typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `dep_${Math.random().toString(36).substring(2, 10)}`,
+        projectId,
+        projectName: input.projectName || 'project',
+        status: input.status || 'ready',
+        url: input.url || 'https://app.optic.doy.best',
+        commitHash,
+        commitMessage: input.commitMessage || 'Manual deployment',
+        creator: input.creator || 'developer',
+        branch: input.branch || 'main',
+        durationSeconds: duration,
+        environment: input.environment || 'production',
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    try {
+      const key = `optic_deployments_${projectId}`;
+      const existing = JSON.parse(localStorage.getItem(key) || '[]');
+      existing.unshift(newDep);
+      localStorage.setItem(key, JSON.stringify(existing));
+    } catch {
+      // ignore
+    }
+
+    return newDep;
+  },
+
+  /**
+   * Get domains for a project
+   */
+  async getProjectDomains(projectId: string): Promise<DomainItem[]> {
+    const sb = getSupabase();
+    if (sb && projectId) {
+      try {
+        const { data, error } = await sb
+          .from('hosting_domains')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('created_at', { ascending: false });
+
+        if (!error && data) {
+          return data.map((d: any) => ({
+            id: d.id,
+            projectId: d.project_id,
+            domain: d.domain,
+            status: d.status || 'verified',
+            dnsType: d.dns_type || 'CNAME',
+            dnsTarget: d.dns_target || 'cname.optic.doy.best',
+            sslStatus: d.ssl_status || 'active',
+            createdAt: d.created_at,
+          }));
+        }
+      } catch (err) {
+        console.warn('Domains fetch notice:', err);
+      }
+    }
+
+    try {
+      const key = `optic_domains_${projectId}`;
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch {
+      // ignore
+    }
+
+    return [];
+  },
+
+  /**
+   * Add a custom domain for a project
+   */
+  async addProjectDomain(projectId: string, orgId: string, domain: string): Promise<DomainItem> {
+    const cleanDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const sb = getSupabase();
+
+    let newDomain: DomainItem | null = null;
+
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from('hosting_domains')
+          .insert({
+            project_id: projectId,
+            organization_id: orgId,
+            domain: cleanDomain,
+            status: 'verified',
+            dns_type: 'CNAME',
+            dns_target: 'cname.optic.doy.best',
+            ssl_status: 'active',
+          })
+          .select()
+          .single();
+
+        if (!error && data) {
+          newDomain = {
+            id: data.id,
+            projectId: data.project_id,
+            domain: data.domain,
+            status: data.status,
+            dnsType: data.dns_type,
+            dnsTarget: data.dns_target,
+            sslStatus: data.ssl_status,
+            createdAt: data.created_at,
+          };
+        }
+      } catch (err) {
+        console.warn('Add domain notice:', err);
+      }
+    }
+
+    if (!newDomain) {
+      newDomain = {
+        id: typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `dom_${Math.random().toString(36).substring(2, 10)}`,
+        projectId,
+        domain: cleanDomain,
+        status: 'verified',
+        dnsType: 'CNAME',
+        dnsTarget: 'cname.optic.doy.best',
+        sslStatus: 'active',
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    try {
+      const key = `optic_domains_${projectId}`;
+      const existing = JSON.parse(localStorage.getItem(key) || '[]');
+      existing.unshift(newDomain);
+      localStorage.setItem(key, JSON.stringify(existing));
+    } catch {
+      // ignore
+    }
+
+    return newDomain;
+  },
+
+  /**
+   * Delete domain
+   */
+  async deleteProjectDomain(domainId: string, projectId: string): Promise<void> {
+    const sb = getSupabase();
+    if (sb) {
+      try {
+        await sb.from('hosting_domains').delete().eq('id', domainId);
+      } catch (err) {
+        console.warn('Delete domain notice:', err);
+      }
+    }
+    try {
+      const key = `optic_domains_${projectId}`;
+      const existing: DomainItem[] = JSON.parse(localStorage.getItem(key) || '[]');
+      const filtered = existing.filter((d) => d.id !== domainId);
+      localStorage.setItem(key, JSON.stringify(filtered));
+    } catch {
+      // ignore
+    }
+  },
 };
+
