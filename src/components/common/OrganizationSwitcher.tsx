@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useOrganization } from '../../context/OrganizationContext';
-import { getOrgAvatarUrl } from '../../lib/avatar';
+import { getOrgAvatarUrl, getDiceBearOrgAvatarUrl } from '../../lib/avatar';
 import { ChevronDown, Plus, Check, Building2 } from 'lucide-react';
 import { Modal } from './Modal';
 import { Input } from './Input';
@@ -198,9 +198,18 @@ export const OrganizationSwitcher: React.FC<OrganizationSwitcherProps> = ({
             required
             autoFocus
           />
-          <div className="p-3 rounded-lg bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400 space-y-1">
-            <div className="font-semibold text-zinc-300">Deterministic Glass Avatar:</div>
-            <div>A unique DiceBear glass avatar will be generated for this organization automatically based on its UUID.</div>
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400">
+            <img
+              src={getDiceBearOrgAvatarUrl(newOrgName || 'Optic Organization')}
+              alt="Organization Avatar Preview"
+              className="w-9 h-9 rounded-lg object-cover border border-zinc-700/60 bg-zinc-800 shrink-0 shadow-sm"
+            />
+            <div className="space-y-0.5 min-w-0">
+              <div className="font-semibold text-zinc-200">Deterministic Glass Avatar</div>
+              <div className="text-[11px] text-zinc-400">
+                Generated automatically from the organization name (<span className="text-zinc-300 font-mono">{newOrgName.trim() || 'Optic Organization'}</span>).
+              </div>
+            </div>
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button

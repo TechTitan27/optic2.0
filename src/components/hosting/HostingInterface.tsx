@@ -12,7 +12,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useOrganization } from '../../context/OrganizationContext';
 import { useToast } from '../../context/ToastContext';
 import { supabaseData } from '../../lib/supabaseData';
-import { getUserAvatarUrl, getOrgAvatarUrl } from '../../lib/avatar';
+import { getUserAvatarUrl, getOrgAvatarUrl, getDiceBearOrgAvatarUrl } from '../../lib/avatar';
 import {
   Server,
   Plus,
@@ -390,14 +390,21 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
                   autoFocus
                 />
 
-                <div className="p-3.5 rounded-lg bg-zinc-900/90 border border-zinc-800 text-xs text-zinc-400 space-y-1.5">
-                  <div className="flex items-center gap-2 text-zinc-200 font-medium">
-                    <Sparkles size={14} className="text-amber-400" />
-                    <span>Deterministic Glass Avatar:</span>
+                <div className="flex items-center gap-3 p-3.5 rounded-lg bg-zinc-900/90 border border-zinc-800 text-xs text-zinc-400">
+                  <img
+                    src={getDiceBearOrgAvatarUrl(onboardOrgName || 'Optic Organization')}
+                    alt="Organization Avatar Preview"
+                    className="w-10 h-10 rounded-lg object-cover border border-zinc-700/60 bg-zinc-800 shrink-0 shadow-sm"
+                  />
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="flex items-center gap-2 text-zinc-200 font-medium">
+                      <Sparkles size={14} className="text-amber-400" />
+                      <span>Deterministic Glass Avatar</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400">
+                      Generated dynamically for your organization from its name (<span className="text-zinc-200 font-mono">{onboardOrgName.trim() || 'Optic Organization'}</span>).
+                    </p>
                   </div>
-                  <p>
-                    A unique, high-contrast DiceBear glass visual avatar is generated dynamically for your organization from its UUID.
-                  </p>
                 </div>
 
                 <Button

@@ -1,4 +1,5 @@
 import { getSupabase } from './supabaseClient';
+import { getDiceBearOrgAvatarUrl } from './avatar';
 import {
   FileItem,
   FolderItem,
@@ -454,6 +455,7 @@ export const supabaseData = {
             slug: m.organizations.slug,
             created_by: m.organizations.created_by,
             created_at: m.organizations.created_at,
+            avatarUrl: m.organizations.avatar_url || getDiceBearOrgAvatarUrl(m.organizations.name),
             role: m.role || 'member',
           }));
       }
@@ -471,6 +473,7 @@ export const supabaseData = {
           slug: o.slug,
           created_by: o.created_by,
           created_at: o.created_at,
+          avatarUrl: o.avatar_url || getDiceBearOrgAvatarUrl(o.name),
           role: 'owner',
         }));
       }
@@ -505,6 +508,7 @@ export const supabaseData = {
       .replace(/^-|-$/g, '') || 'org';
     const slug = `${baseSlug}-${Math.random().toString(36).substring(2, 6)}`;
 
+    const orgAvatarUrl = getDiceBearOrgAvatarUrl(cleanName);
     let newOrg: Organization | null = null;
 
     if (sb) {
@@ -515,6 +519,7 @@ export const supabaseData = {
             name: cleanName,
             slug,
             created_by: userId,
+            avatar_url: orgAvatarUrl,
           })
           .select()
           .single();
@@ -537,6 +542,7 @@ export const supabaseData = {
             slug: orgData.slug,
             created_by: orgData.created_by,
             created_at: orgData.created_at,
+            avatarUrl: orgData.avatar_url || orgAvatarUrl,
             role: 'owner',
           };
         }
@@ -557,6 +563,7 @@ export const supabaseData = {
         slug,
         created_by: userId,
         created_at: new Date().toISOString(),
+        avatarUrl: orgAvatarUrl,
         role: 'owner',
       };
     }

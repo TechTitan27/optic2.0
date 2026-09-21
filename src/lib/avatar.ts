@@ -110,12 +110,38 @@ export function getUserAvatarUrl(user?: AvatarEntity | null): string {
 }
 
 /**
- * Returns deterministic DiceBear `glass` avatar for an organization (or custom avatarUrl if present).
+ * Extracts the organization name seed for deterministic DiceBear generation.
+ * NEVER uses the organization UUID / ID.
  */
-export function getOrgAvatarUrl(org?: AvatarEntity | null): string {
-  if (org?.avatarUrl && typeof org.avatarUrl === 'string' && org.avatarUrl.trim().length > 0) {
+export function getOrgNameSeed(org?: (AvatarEntity & { name?: string }) | null): string {
+  if (!org) return 'Optic Organization';
+  return org.name?.trim() || 'Optic Organization';
+}
+
+/**
+ * Generates the canonical DiceBear `glass` avatar URL for an organization based on its NAME.
+ * NEVER uses the organization UUID / ID as the seed.
+ */
+export function getDiceBearOrgAvatarUrl(orgName: string): string {
+  const clean = orgName.trim() || 'Optic Organization';
+  return `https://api.dicebear.com/9.x/glass/svg?seed=${encodeURIComponent(clean)}`;
+}
+
+/**
+ * Returns deterministic DiceBear `glass` avatar for an organization using its NAME as the seed.
+ * Excludes third-party OAuth URLs and never uses the organization UUID / ID.
+ */
+export function getOrgAvatarUrl(org?: (AvatarEntity & { name?: string }) | null): string {
+  if (
+    org?.avatarUrl &&
+    typeof org.avatarUrl === 'string' &&
+    org.avatarUrl.trim().length > 0 &&
+    !isThirdPartyOAuthAvatar(org.avatarUrl)
+  ) {
     return org.avatarUrl.trim();
   }
-  const seed = org?.name?.trim() || org?.slug?.trim() || org?.id || 'optic-org';
-  return `https://api.dicebear.com/9.x/glass/svg?seed=${encodeURIComponent(seed)}`;
+
+  // Strictly use organization NAME as deterministic seed (NEVER the org ID or UUID)
+  const nameSeed = getOrgNameSeed(org);
+  return getDiceBearOrgAvatarUrl(nameSeed);
 }
