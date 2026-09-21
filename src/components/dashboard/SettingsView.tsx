@@ -27,13 +27,19 @@ import {
 } from '../../lib/supabaseClient';
 
 export const SettingsView: React.FC = () => {
-  const { user, profile, isSupabaseConfigured, supabaseUrl, refreshSession } = useAuth();
+  const { user, profile, isSupabaseConfigured, supabaseUrl, refreshSession, updateProfile } = useAuth();
   const toast = useToast();
 
   const [fullName, setFullName] = useState(
     profile?.fullName || user?.user_metadata?.full_name || user?.email?.split('@')[0] || ''
   );
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (profile?.fullName) {
+      setFullName(profile.fullName);
+    }
+  }, [profile?.fullName]);
 
   // Anon Key state
   const [anonKeyInput, setAnonKeyInput] = useState('');
@@ -49,11 +55,24 @@ export const SettingsView: React.FC = () => {
     }
   }, []);
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSaved(true);
-    toast.success('Developer profile updated locally.', 'Profile Saved');
-    setTimeout(() => setSaved(false), 2500);
+    if (!fullName.trim()) {
+      toast.error('Please enter your full name.', 'Validation Error');
+      return;
+    }
+    try {
+      if (user) {
+        await updateProfile(fullName.trim());
+        toast.success('Developer profile and name-based avatar saved to Supabase.', 'Profile Saved');
+      } else {
+        toast.success('Developer profile updated locally.', 'Profile Saved');
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to update profile in Supabase.', 'Save Error');
+    }
   };
 
   const handleTestConnection = async () => {
@@ -156,7 +175,7 @@ export const SettingsView: React.FC = () => {
           {/* Avatar & Identity Banner */}
           <div className="flex items-center gap-4 p-3.5 mb-4 rounded-xl bg-zinc-950 border border-zinc-800">
             <img
-              src={getUserAvatarUrl(user)}
+              src={getUserAvatarUrl(user ? { ...user, fullName, name: fullName } : { fullName, name: fullName })}
               alt="Developer Avatar"
               className="w-12 h-12 rounded-xl object-cover border border-zinc-700/80 bg-zinc-800 shadow-md"
             />
@@ -170,7 +189,7 @@ export const SettingsView: React.FC = () => {
                 </Badge>
               </div>
               <p className="text-[11px] text-zinc-400">
-                Generated deterministically from your User UUID (<code className="font-mono text-zinc-300">{user?.id?.slice(0, 8) || 'usr_dev'}...</code>).
+                Generated deterministically from your name (<code className="font-mono text-zinc-300">{fullName || 'Optic Developer'}</code>) and stored in Supabase.
               </p>
             </div>
           </div>

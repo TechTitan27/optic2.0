@@ -4,6 +4,12 @@ import { OrganizationProvider } from './context/OrganizationContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider } from './context/ToastContext';
 import { SurfaceType } from './types';
+import {
+  resolveSurfaceState,
+  getDomainInfo,
+  isCrossSubdomainNavigation,
+  getSurfaceUrl,
+} from './lib/domainNavigation';
 import { LandingPage } from './components/landing/LandingPage';
 import { DashboardLayout } from './components/dashboard/DashboardLayout';
 import { OverviewView } from './components/dashboard/OverviewView';
@@ -21,142 +27,45 @@ import { NotFoundPage } from './components/common/NotFoundPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 function MainApp() {
-  const { user, loading } = useAuth();
+  const { user } = useAuth();
 
-  // Detect surface from hostname or pathname
-  const detectInitialSurface = (): {
-    surface: SurfaceType;
-    path: string;
-    tab?: 'overview' | 'keys' | 'settings';
-  } => {
-    if (typeof window !== 'undefined') {
-      const host = window.location.hostname.toLowerCase();
-      const path = window.location.pathname.toLowerCase();
-      const hash = window.location.hash || '';
-      const search = window.location.search || '';
+  // 1. Initial surface detection with hostname as primary source of truth
+  const initial = resolveSurfaceState();
+  const domainInfo = getDomainInfo();
 
-      // 1. OAuth callback detection (route or OAuth tokens/codes)
-      if (
-        path.startsWith('/auth/callback') ||
-        path.startsWith('/callback') ||
-        path.startsWith('/auth/v1/callback') ||
-        hash.includes('access_token=') ||
-        hash.includes('refresh_token=') ||
-        search.includes('code=') ||
-        search.includes('error_description=')
-      ) {
-        return { surface: 'callback', path: path || '/auth/callback' };
-      }
+  // Enforce host lock: cloud.optic.doy.best can ONLY render 'cloud' (or auth)
+  const effectiveInitialSurface: SurfaceType = domainInfo.lockedSurface
+    ? ['login', 'signup', 'callback'].includes(initial.surface)
+      ? initial.surface
+      : domainInfo.lockedSurface
+    : initial.surface;
 
-      // 2. Authentication routes
-      if (path === '/login' || path === '/signin' || path === '/auth/login') {
-        return { surface: 'login', path: '/login' };
-      }
-      if (path === '/signup' || path === '/register' || path === '/auth/signup') {
-        return { surface: 'signup', path: '/signup' };
-      }
-
-      // 3. Legal pages
-      if (path.startsWith('/privacy') || path.startsWith('/legal/privacy')) {
-        return { surface: 'privacy', path: '/privacy' };
-      }
-      if (path.startsWith('/terms') || path.startsWith('/legal/terms')) {
-        return { surface: 'terms', path: '/terms' };
-      }
-
-      // 4. Subdomain-based product surfaces
-      // - cloud.optic.doy.best → Optic Cloud
-      // - hosting.optic.doy.best → Optic Hosting
-      // - docs.optic.doy.best → Optic Docs
-      // - api.optic.doy.best → Optic API
-      if (host.startsWith('cloud.') || host === 'cloud.localhost') return { surface: 'cloud', path: path || '/' };
-      if (host.startsWith('hosting.') || host === 'hosting.localhost') return { surface: 'hosting', path: path || '/' };
-      if (host.startsWith('docs.') || host === 'docs.localhost') return { surface: 'docs', path: path || '/' };
-      if (host.startsWith('api.') || host === 'api.localhost') return { surface: 'api', path: path || '/' };
-
-      // 5. Dashboard routes and specific sub-tabs
-      if (
-        path === '/keys' ||
-        path === '/apikeys' ||
-        path === '/api-keys' ||
-        path.startsWith('/dashboard/keys')
-      ) {
-        return { surface: 'dashboard', path: '/dashboard/keys', tab: 'keys' };
-      }
-      if (
-        path === '/settings' ||
-        path === '/account' ||
-        path.startsWith('/dashboard/settings')
-      ) {
-        return { surface: 'dashboard', path: '/dashboard/settings', tab: 'settings' };
-      }
-      if (path === '/dashboard' || path.startsWith('/dashboard')) {
-        return { surface: 'dashboard', path: '/dashboard', tab: 'overview' };
-      }
-
-      // 6. Cloud Storage & Buckets (local development fallback or direct path)
-      if (
-        path.startsWith('/cloud') ||
-        path.startsWith('/storage') ||
-        path.startsWith('/buckets')
-      ) {
-        return { surface: 'cloud', path: '/cloud' };
-      }
-
-      // 7. Hosting & Deployments (local development fallback or direct path)
-      if (
-        path.startsWith('/hosting') ||
-        path.startsWith('/sites') ||
-        path.startsWith('/deploy') ||
-        path.startsWith('/deployments')
-      ) {
-        return { surface: 'hosting', path: '/hosting' };
-      }
-
-      // 8. Documentation (local development fallback or direct path)
-      if (
-        path.startsWith('/docs') ||
-        path.startsWith('/documentation') ||
-        path.startsWith('/guide') ||
-        path.startsWith('/api-docs')
-      ) {
-        return { surface: 'docs', path: '/docs' };
-      }
-
-      // 9. Developer API area (local development fallback or direct path)
-      if (
-        path === '/api' ||
-        path.startsWith('/api/') ||
-        path.startsWith('/developer')
-      ) {
-        return { surface: 'api', path: '/api' };
-      }
-
-      // 10. Root landing page
-      if (path === '/' || path === '') {
-        return { surface: 'main', path: '/' };
-      }
-
-      // 11. Unmatched path -> in-app 404 page with navigation options
-      return { surface: 'notfound', path };
-    }
-    return { surface: 'main', path: '/' };
-  };
-
-  const initial = detectInitialSurface();
-  const [currentSurface, setCurrentSurface] = useState<SurfaceType>(initial.surface);
+  const [currentSurface, setCurrentSurface] = useState<SurfaceType>(effectiveInitialSurface);
   const [currentPath, setCurrentPath] = useState<string>(initial.path);
   const [dashboardTab, setDashboardTab] = useState<'overview' | 'keys' | 'settings'>(
     initial.tab || 'overview'
   );
-  const [redirectTarget, setRedirectTarget] = useState<{ surface: SurfaceType; path: string }>({
-    surface: initial.surface === 'main' || initial.surface === 'login' || initial.surface === 'signup'
-      ? 'dashboard'
-      : initial.surface,
-    path: initial.path === '/' || initial.path === '/login' || initial.path === '/signup'
-      ? '/dashboard'
-      : initial.path,
-  });
+
+  // Dynamic redirect target matching the current product subdomain
+  const getContextualRedirect = (): { surface: SurfaceType; path: string } => {
+    if (domainInfo.productHost === 'cloud') {
+      return { surface: 'cloud', path: '/' };
+    }
+    if (domainInfo.productHost === 'hosting') {
+      return { surface: 'hosting', path: '/' };
+    }
+    if (domainInfo.productHost === 'docs') {
+      return { surface: 'docs', path: '/' };
+    }
+    if (domainInfo.productHost === 'api') {
+      return { surface: 'api', path: '/api' };
+    }
+    return { surface: 'dashboard', path: '/dashboard' };
+  };
+
+  const [redirectTarget, setRedirectTarget] = useState<{ surface: SurfaceType; path: string }>(
+    getContextualRedirect
+  );
 
   // Surface navigation handler
   const handleNavigateSurface = (
@@ -164,47 +73,96 @@ function MainApp() {
     path: string = '/',
     tab?: 'overview' | 'keys' | 'settings'
   ) => {
-    // Perform instant client-side surface navigation
+    // 1. Check if navigating to target surface requires crossing subdomains in production
+    if (isCrossSubdomainNavigation(surface)) {
+      const destinationUrl = getSurfaceUrl(surface, path);
+      if (typeof window !== 'undefined') {
+        window.location.href = destinationUrl;
+      }
+      return;
+    }
+
+    // 2. Enforce hostname lock if on a dedicated product subdomain
+    const currentInfo = getDomainInfo();
+    if (currentInfo.lockedSurface) {
+      const isAuthFlow = ['login', 'signup', 'callback'].includes(surface);
+      if (surface !== currentInfo.lockedSurface && !isAuthFlow) {
+        // Attempting to render a different product locally on a locked subdomain:
+        // Must perform cross-subdomain navigation to the destination
+        const destinationUrl = getSurfaceUrl(surface, path);
+        if (typeof window !== 'undefined') {
+          window.location.href = destinationUrl;
+        }
+        return;
+      }
+    }
+
+    // 3. Perform internal client-side navigation within current subdomain or local environment
     setCurrentSurface(surface);
     setCurrentPath(path);
     if (tab) {
       setDashboardTab(tab);
     }
+
     if (typeof window !== 'undefined') {
       let nextUrl = path;
-      if (surface === 'dashboard') {
-        if (tab === 'keys') nextUrl = '/dashboard/keys';
-        else if (tab === 'settings') nextUrl = '/dashboard/settings';
-        else nextUrl = '/dashboard';
-      } else if (surface === 'cloud') nextUrl = '/cloud';
-      else if (surface === 'hosting') nextUrl = '/hosting';
-      else if (surface === 'docs') nextUrl = '/docs';
-      else if (surface === 'api') nextUrl = '/api';
-      else if (surface === 'privacy') nextUrl = '/privacy';
-      else if (surface === 'terms') nextUrl = '/terms';
-      else if (surface === 'login') nextUrl = '/login';
-      else if (surface === 'signup') nextUrl = '/signup';
-      else if (surface === 'callback') nextUrl = '/auth/callback';
-      else if (surface === 'main') nextUrl = '/';
+      if (currentInfo.lockedSurface) {
+        // Keep URL clean on dedicated subdomains (cloud.optic.doy.best / hosting.optic.doy.best)
+        nextUrl = path === '/login' || path === '/signup' || path === '/auth/callback' ? path : '/';
+      } else {
+        if (surface === 'dashboard') {
+          if (tab === 'keys') nextUrl = '/dashboard/keys';
+          else if (tab === 'settings') nextUrl = '/dashboard/settings';
+          else nextUrl = '/dashboard';
+        } else if (surface === 'cloud') nextUrl = '/cloud';
+        else if (surface === 'hosting') nextUrl = '/hosting';
+        else if (surface === 'docs') nextUrl = '/docs';
+        else if (surface === 'api') nextUrl = '/api';
+        else if (surface === 'privacy') nextUrl = '/privacy';
+        else if (surface === 'terms') nextUrl = '/terms';
+        else if (surface === 'login') nextUrl = '/login';
+        else if (surface === 'signup') nextUrl = '/signup';
+        else if (surface === 'callback') nextUrl = '/auth/callback';
+        else if (surface === 'main') nextUrl = '/';
+      }
 
       try {
         window.history.pushState({ surface, tab }, '', nextUrl);
       } catch {
-        // ignore if in restricted iframe
+        // ignore if in sandboxed iframe
       }
     }
   };
 
-  // Sync with browser back/forward buttons
+  // Sync with browser back/forward buttons:
+  // The hostname always wins over the history state when deciding which product shell to render.
   useEffect(() => {
     const handlePopState = () => {
-      const detected = detectInitialSurface();
-      setCurrentSurface(detected.surface);
-      setCurrentPath(detected.path);
-      if (detected.tab) {
-        setDashboardTab(detected.tab);
+      const resolved = resolveSurfaceState();
+      const currentInfo = getDomainInfo();
+
+      if (currentInfo.lockedSurface) {
+        const isAuthFlow = ['login', 'signup', 'callback'].includes(resolved.surface);
+        if (resolved.surface !== currentInfo.lockedSurface && !isAuthFlow) {
+          // Force locked surface
+          setCurrentSurface(currentInfo.lockedSurface);
+          setCurrentPath('/');
+          try {
+            window.history.replaceState(null, '', '/');
+          } catch {
+            // ignore
+          }
+          return;
+        }
+      }
+
+      setCurrentSurface(resolved.surface);
+      setCurrentPath(resolved.path);
+      if (resolved.tab) {
+        setDashboardTab(resolved.tab);
       }
     };
+
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
@@ -285,7 +243,7 @@ function MainApp() {
           <AuthGate
             surfaceName="Optic Cloud Storage"
             onOpenAuth={() => {
-              setRedirectTarget({ surface: 'cloud', path: '/cloud' });
+              setRedirectTarget({ surface: 'cloud', path: '/' });
               handleNavigateSurface('login', '/login');
             }}
             onGoHome={() => handleNavigateSurface('main', '/')}
@@ -299,7 +257,7 @@ function MainApp() {
           <AuthGate
             surfaceName="Optic Hosting"
             onOpenAuth={() => {
-              setRedirectTarget({ surface: 'hosting', path: '/hosting' });
+              setRedirectTarget({ surface: 'hosting', path: '/' });
               handleNavigateSurface('login', '/login');
             }}
             onGoHome={() => handleNavigateSurface('main', '/')}

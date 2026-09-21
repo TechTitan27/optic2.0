@@ -3,7 +3,11 @@ import { OpticLogo } from '../brand/OpticLogo';
 import { SurfaceType } from '../../types';
 
 interface OpticFooterProps {
-  onNavigateSurface: (surface: SurfaceType, path?: string) => void;
+  onNavigateSurface: (
+    surface: SurfaceType,
+    path?: string,
+    tab?: 'overview' | 'keys' | 'settings'
+  ) => void;
   compact?: boolean;
 }
 
@@ -149,7 +153,7 @@ export const OpticFooter: React.FC<OpticFooterProps> = ({
             </li>
             <li>
               <button
-                onClick={() => onNavigateSurface('dashboard', '/dashboard')}
+                onClick={() => onNavigateSurface('dashboard', '/dashboard/keys', 'keys')}
                 className="hover:text-zinc-200 transition-colors"
               >
                 API Keys

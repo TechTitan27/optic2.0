@@ -11,6 +11,7 @@ import { storageService } from '../../lib/storageService';
 import { supabaseData } from '../../lib/supabaseData';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { getUserAvatarUrl } from '../../lib/avatar';
 import {
   Upload,
   ArrowLeft,
@@ -328,7 +329,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <Button
             size="sm"
             variant="outline"
@@ -347,6 +348,19 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
           >
             Upload File
           </Button>
+
+          {user && (
+            <div className="flex items-center gap-2 pl-2 border-l border-zinc-800">
+              <img
+                src={getUserAvatarUrl(user)}
+                alt={user.user_metadata?.full_name || user.email || 'User Avatar'}
+                className="w-7 h-7 rounded-lg object-cover border border-zinc-700/80 bg-zinc-800 shadow-sm"
+              />
+              <span className="hidden md:inline text-xs font-medium text-zinc-300 max-w-[130px] truncate">
+                {user.user_metadata?.full_name || user.email?.split('@')[0]}
+              </span>
+            </div>
+          )}
         </div>
       </header>
 

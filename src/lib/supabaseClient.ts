@@ -333,12 +333,17 @@ export async function signUpWithEmailPassword(email: string, password: string, f
       'Supabase publishable key is not configured. Please provide VITE_SUPABASE_PUBLISHABLE_KEY to sign up.'
     );
   }
+  const cleanName = fullName?.trim() || email.split('@')[0] || 'Optic Developer';
+  const avatarUrl = `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(cleanName)}`;
+
   const { data, error } = await sb.auth.signUp({
     email,
     password,
     options: {
       data: {
-        full_name: fullName,
+        full_name: cleanName,
+        name: cleanName,
+        avatar_url: avatarUrl,
       },
     },
   });
@@ -346,6 +351,29 @@ export async function signUpWithEmailPassword(email: string, password: string, f
     throw new Error(error.message);
   }
   return data;
+}
+
+export async function updateUserProfile(fullName: string, customAvatarUrl?: string) {
+  const sb = getSupabase();
+  if (!sb) {
+    throw new Error('Supabase publishable key is not configured.');
+  }
+  const cleanName = fullName.trim() || 'Optic Developer';
+  const avatarUrl =
+    customAvatarUrl ||
+    `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(cleanName)}`;
+
+  const { data, error } = await sb.auth.updateUser({
+    data: {
+      full_name: cleanName,
+      name: cleanName,
+      avatar_url: avatarUrl,
+    },
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return { user: data.user, avatarUrl };
 }
 
 export async function signOutUser() {

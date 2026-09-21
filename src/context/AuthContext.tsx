@@ -9,9 +9,11 @@ import {
   signOutUser,
   getActiveSupabaseUrl,
   getActiveAnonKey,
+  updateUserProfile,
 } from '../lib/supabaseClient';
 import { UserProfile } from '../types';
 import { notifyToast } from './ToastContext';
+import { getUserAvatarUrl } from '../lib/avatar';
 
 interface AuthContextType {
   user: User | null;
@@ -29,6 +31,7 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshSession: () => Promise<void>;
+  updateProfile: (fullName: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -57,11 +60,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         u.user_metadata?.full_name ||
         u.user_metadata?.name ||
         u.email?.split('@')[0] ||
-        'developer';
+        'Optic Developer';
       const avatarUrl =
         u.user_metadata?.avatar_url ||
         u.user_metadata?.picture ||
-        undefined;
+        getUserAvatarUrl({ fullName, email: u.email });
 
       const userProf: UserProfile = {
         id: u.id,
@@ -331,6 +334,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const updateProfile = async (newFullName: string) => {
+    const cleanName = newFullName.trim();
+    if (!cleanName) {
+      throw new Error('Please enter a valid full name.');
+    }
+    const { user: updatedUser } = await updateUserProfile(cleanName);
+    if (updatedUser) {
+      syncUserFromSession(
+        session
+          ? { ...session, user: updatedUser }
+          : ({ user: updatedUser, access_token: accessToken || '' } as any)
+      );
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -349,6 +367,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signInWithGoogle,
         signOut,
         refreshSession,
+        updateProfile,
       }}
     >
       {children}
