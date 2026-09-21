@@ -368,6 +368,8 @@ export async function updateUserProfile(fullName: string, customAvatarUrl?: stri
       full_name: cleanName,
       name: cleanName,
       avatar_url: avatarUrl,
+      optic_avatar_url: avatarUrl,
+      picture: avatarUrl,
     },
   });
   if (error) {

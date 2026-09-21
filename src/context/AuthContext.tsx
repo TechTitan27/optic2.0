@@ -13,7 +13,7 @@ import {
 } from '../lib/supabaseClient';
 import { UserProfile } from '../types';
 import { notifyToast } from './ToastContext';
-import { getUserAvatarUrl } from '../lib/avatar';
+import { getUserAvatarUrl, isThirdPartyOAuthAvatar } from '../lib/avatar';
 
 interface AuthContextType {
   user: User | null;
@@ -61,10 +61,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         u.user_metadata?.name ||
         u.email?.split('@')[0] ||
         'Optic Developer';
-      const avatarUrl =
-        u.user_metadata?.avatar_url ||
-        u.user_metadata?.picture ||
-        getUserAvatarUrl({ fullName, email: u.email });
+      // Strictly compute deterministic DiceBear Notionists avatar based on user's name
+      const avatarUrl = getUserAvatarUrl(u);
 
       const userProf: UserProfile = {
         id: u.id,
@@ -79,6 +77,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ user: u, profile: userProf }));
       } catch {
         // ignore
+      }
+
+      // If Supabase user_metadata currently stores a Google OAuth image, automatically
+      // persist the DiceBear avatar to Supabase in the background
+      const meta = u.user_metadata;
+      if (
+        isThirdPartyOAuthAvatar(meta?.avatar_url) ||
+        isThirdPartyOAuthAvatar(meta?.picture) ||
+        (!meta?.avatar_url && !meta?.optic_avatar_url)
+      ) {
+        updateUserProfile(fullName, avatarUrl).catch(() => {
+          // silently handle network or unconfigured error
+        });
       }
     } else {
       setUser(null);
@@ -121,6 +132,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           parsed.profile?.fullName === 'Alex Rivera'
         ) {
           localStorage.removeItem(LOCAL_SESSION_KEY);
+        } else if (
+          isThirdPartyOAuthAvatar(parsed.profile?.avatarUrl) ||
+          isThirdPartyOAuthAvatar(parsed.user?.user_metadata?.avatar_url) ||
+          isThirdPartyOAuthAvatar(parsed.user?.user_metadata?.picture)
+        ) {
+          if (parsed.profile) {
+            parsed.profile.avatarUrl = getUserAvatarUrl(parsed.user || parsed.profile);
+            localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(parsed));
+          }
         }
       }
     } catch {
