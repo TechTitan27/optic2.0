@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { SurfaceType, FileItem, FolderItem, UsageStats } from '../../types';
-import { OpticLogo } from '../brand/OpticLogo';
-import { OpticFooter } from '../common/OpticFooter';
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
 import { Card } from '../common/Card';
@@ -11,10 +9,8 @@ import { storageService } from '../../lib/storageService';
 import { supabaseData } from '../../lib/supabaseData';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { getUserAvatarUrl } from '../../lib/avatar';
 import {
   Upload,
-  ArrowLeft,
   FolderPlus,
   Search,
   Folder,
@@ -36,6 +32,7 @@ import {
   AlertCircle,
   RefreshCw,
   Info,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface CloudInterfaceProps {
@@ -313,23 +310,19 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
   ).toFixed(1);
 
   return (
-    <div className="min-h-screen bg-black text-zinc-100 flex flex-col font-sans selection:bg-zinc-800 selection:text-white">
-      <header className="h-14 border-b border-zinc-800/80 bg-zinc-950 px-4 sm:px-6 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => onNavigateSurface('dashboard', '/dashboard')}
-            className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100 text-xs font-medium transition-colors"
-          >
-            <ArrowLeft size={14} />
-            <span className="hidden sm:inline">Dashboard</span>
-          </button>
-          <div className="h-4 w-px bg-zinc-800" />
-          <div className="flex items-center gap-2">
-            <OpticLogo size={20} showWordmark={true} surfaceLabel="Cloud" />
-          </div>
+    <div className="space-y-6">
+      {/* Top Title & Primary Actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-900">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+            Cloud Storage
+          </h1>
+          <p className="text-xs text-zinc-400 mt-1">
+            Store and manage object files, folders, and authenticated share links.
+          </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <Button
             size="sm"
             variant="outline"
@@ -348,107 +341,51 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
           >
             Upload File
           </Button>
-
-          {user && (
-            <div className="flex items-center gap-2 pl-2 border-l border-zinc-800">
-              <img
-                src={getUserAvatarUrl(user)}
-                alt={user.user_metadata?.full_name || user.email || 'User Avatar'}
-                className="w-7 h-7 rounded-lg object-cover border border-zinc-700/80 bg-zinc-800 shadow-sm"
-              />
-              <span className="hidden md:inline text-xs font-medium text-zinc-300 max-w-[130px] truncate">
-                {user.user_metadata?.full_name || user.email?.split('@')[0]}
-              </span>
-            </div>
-          )}
         </div>
-      </header>
+      </div>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-        {/* Top Title & Primary Actions */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-900">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-mono text-sky-400 mb-1">
-              <Database size={13} />
-              <span>SUPABASE SCHEMA: files • folders • share_links • usage</span>
-            </div>
-            <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-              Cloud Storage Manager
-            </h1>
-            <p className="text-xs text-zinc-400 mt-1">
-              Store and manage object files, folders, and authenticated share links.
+      {/* Storage Allocation Meter */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
+              Storage Allocation
+            </span>
+            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/40">Active Tier</span>
+          </div>
+          <div className="text-lg font-bold text-white tracking-tight">
+            {storageUsedGB} GB <span className="text-xs font-normal text-zinc-500">/ {storageLimitGB} GB</span>
+          </div>
+          <div className="mt-2.5 w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+            <div
+              className="bg-sky-500 h-full rounded-full transition-all duration-300"
+              style={{ width: `${storagePercent}%` }}
+            />
+          </div>
+          <div className="text-[10px] text-zinc-500 mt-2 font-mono flex justify-between">
+            <span>{storagePercent}% used</span>
+            <span>{files.length} active files</span>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 col-span-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="text-sm font-semibold text-white">Direct Uploads</div>
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Upload objects directly into your organization bucket with automatic chunking and instant shareable URLs.
             </p>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setNewFolderModalOpen(true)}
-              icon={<FolderPlus size={14} />}
-              className="text-xs"
-            >
-              New Folder
-            </Button>
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => setUploadModalOpen(true)}
-              icon={<Upload size={14} />}
-              className="text-xs"
-            >
-              Upload File
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setUploadModalOpen(true)}
+            icon={<Upload size={14} />}
+            className="text-xs shrink-0 self-start sm:self-auto"
+          >
+            Select Files
+          </Button>
         </div>
-
-        {/* Database Usage Meter & Storage Provider Banner */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
-                Storage Allocation
-              </span>
-              <span className="text-[10px] font-mono text-sky-400">table: usage</span>
-            </div>
-            <div className="text-lg font-bold text-white tracking-tight">
-              {storageUsedGB} GB <span className="text-xs font-normal text-zinc-500">/ {storageLimitGB} GB</span>
-            </div>
-            <div className="mt-2.5 w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
-              <div
-                className="bg-sky-500 h-full rounded-full transition-all duration-300"
-                style={{ width: `${storagePercent}%` }}
-              />
-            </div>
-            <div className="text-[10px] text-zinc-500 mt-2 font-mono flex justify-between">
-              <span>{storagePercent}% used</span>
-              <span>{files.length} active files</span>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 col-span-2 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
-                  Storage Backend Status
-                </span>
-                <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded">
-                  Modular Adapter
-                </span>
-              </div>
-              <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
-                Supabase database tables (<code className="text-sky-300">files</code>,{' '}
-                <code className="text-sky-300">folders</code>, <code className="text-sky-300">usage</code>,{' '}
-                <code className="text-sky-300">share_links</code>) are live. Object binary storage is wired through
-                the isolated storage adapter ready for Cloudflare R2 or Supabase Storage.
-              </p>
-            </div>
-            <div className="mt-3 flex items-center gap-2 text-[11px] font-mono text-zinc-500">
-              <Info size={12} className="text-sky-400 shrink-0" />
-              <span>RLS enforces data isolation so you only access your own files.</span>
-            </div>
-          </div>
-        </div>
+      </div>
 
         {/* Error message alert if query failed */}
         {errorMessage && (
@@ -615,7 +552,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
             {loading ? (
               <div className="p-12 text-center text-xs text-zinc-500 font-mono flex flex-col items-center gap-3">
                 <div className="w-5 h-5 border-2 border-zinc-700 border-t-sky-400 rounded-full animate-spin" />
-                <span>Loading files from Supabase database...</span>
+                <span>Loading files from Optic Cloud storage...</span>
               </div>
             ) : filteredFiles.length === 0 && folders.length === 0 ? (
               <div className="p-16 text-center flex flex-col items-center gap-3">
@@ -711,9 +648,6 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
             )}
           </Card>
         </div>
-      </main>
-
-      <OpticFooter onNavigateSurface={onNavigateSurface} compact={true} />
 
       {/* Upload Modal (Drag & Drop + Click + Error Handling) */}
       <Modal
@@ -725,7 +659,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
           }
         }}
         title="Upload to Optic Cloud"
-        description="Upload files directly to object storage with Supabase metadata registration."
+        description="Upload files securely to your high-performance storage bucket."
       >
         <div className="space-y-4">
           <input
@@ -797,7 +731,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         isOpen={newFolderModalOpen}
         onClose={() => setNewFolderModalOpen(false)}
         title="Create New Folder"
-        description="Creates a folder entry in Supabase database."
+        description="Create a new directory in this storage path."
       >
         <form onSubmit={handleCreateFolder} className="space-y-4">
           <Input
@@ -828,7 +762,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         isOpen={renameFolderModalOpen}
         onClose={() => setRenameFolderModalOpen(false)}
         title="Rename Folder"
-        description="Updates folder record in Supabase database."
+        description="Enter a new name for this directory."
       >
         <form onSubmit={handleRenameFolder} className="space-y-4">
           <Input
@@ -859,7 +793,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
           isOpen={Boolean(selectedFileForDetail)}
           onClose={() => setSelectedFileForDetail(null)}
           title={selectedFileForDetail.name}
-          description="File metadata synced from Supabase files table"
+          description="File attributes and storage metadata"
         >
           <div className="space-y-3 font-mono text-xs">
             <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
@@ -924,7 +858,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
             setCopiedLink(false);
           }}
           title="Share File Link"
-          description="Managed via Supabase share_links table"
+          description="Temporary authenticated link for secure file access"
         >
           <div className="space-y-4">
             <div className="space-y-1.5">

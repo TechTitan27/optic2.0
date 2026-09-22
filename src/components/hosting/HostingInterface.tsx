@@ -5,7 +5,6 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../co
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { CodeBlock } from '../common/CodeBlock';
-import { OpticFooter } from '../common/OpticFooter';
 import { OrganizationSwitcher } from '../common/OrganizationSwitcher';
 import { HostingProject, DeploymentItem, DeploymentLog, DomainItem, SurfaceType } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -33,7 +32,6 @@ import {
   Sparkles,
   Layers,
 } from 'lucide-react';
-import { OpticLogo } from '../brand/OpticLogo';
 
 interface HostingInterfaceProps {
   onNavigateSurface: (surface: SurfaceType, path?: string) => void;
@@ -306,64 +304,8 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
     : [];
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-950 text-zinc-100 font-sans">
-      {/* Clean Header */}
-      <header className="sticky top-0 z-30 h-14 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3 sm:gap-4">
-          <button
-            onClick={() => onNavigateSurface('dashboard', '/dashboard')}
-            className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100 text-xs font-medium transition-colors"
-          >
-            <ArrowLeft size={14} />
-            <span className="hidden sm:inline">Dashboard</span>
-          </button>
-          <div className="h-4 w-px bg-zinc-800" />
-          <div className="flex items-center gap-2">
-            <OpticLogo size={20} showWordmark={true} surfaceLabel="Hosting" />
-          </div>
-
-          {/* Organization Switcher with Glass DiceBear Avatar */}
-          <div className="h-4 w-px bg-zinc-800 hidden sm:block" />
-          <OrganizationSwitcher className="hidden sm:block" />
-        </div>
-
-        <div className="flex items-center gap-3">
-          {/* Mobile Organization Switcher */}
-          <div className="sm:hidden">
-            <OrganizationSwitcher compact />
-          </div>
-
-          {/* User profile avatar (Notionists style) */}
-          {user && (
-            <div className="flex items-center gap-2 pl-2 border-l border-zinc-800/80">
-              <img
-                src={getUserAvatarUrl(user)}
-                alt={user.email || 'User'}
-                className="w-6 h-6 rounded-md object-cover border border-zinc-700/80 bg-zinc-800 shrink-0"
-              />
-              <span className="text-xs font-mono text-zinc-400 hidden md:inline truncate max-w-[120px]">
-                {user.email}
-              </span>
-            </div>
-          )}
-
-          {currentOrg && (
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => setCreateProjectModalOpen(true)}
-              icon={<Plus size={14} />}
-              className="text-xs"
-            >
-              New Project
-            </Button>
-          )}
-        </div>
-      </header>
-
-      {/* Main Body */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6">
-        {/* CASE 1: USER HAS NO ORGANIZATIONS ON FIRST VISIT */}
+    <div className="space-y-6">
+      {/* CASE 1: USER HAS NO ORGANIZATIONS ON FIRST VISIT */}
         {!orgLoading && !hasOrganizations ? (
           <div className="max-w-xl mx-auto py-12 px-4 text-center space-y-6">
             <div className="w-14 h-14 rounded-2xl bg-indigo-950/60 border border-indigo-800/60 mx-auto flex items-center justify-center text-indigo-400 shadow-xl shadow-indigo-950/30">
@@ -393,16 +335,16 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
                 <div className="flex items-center gap-3 p-3.5 rounded-lg bg-zinc-900/90 border border-zinc-800 text-xs text-zinc-400">
                   <img
                     src={getDiceBearOrgAvatarUrl(onboardOrgName || 'Optic Organization')}
-                    alt="Organization Avatar Preview"
+                    alt="Organization Icon Preview"
                     className="w-10 h-10 rounded-lg object-cover border border-zinc-700/60 bg-zinc-800 shrink-0 shadow-sm"
                   />
                   <div className="space-y-0.5 min-w-0">
                     <div className="flex items-center gap-2 text-zinc-200 font-medium">
                       <Sparkles size={14} className="text-amber-400" />
-                      <span>Deterministic Glass Avatar</span>
+                      <span>Organization Visual Mark</span>
                     </div>
                     <p className="text-[11px] text-zinc-400">
-                      Generated dynamically for your organization from its name (<span className="text-zinc-200 font-mono">{onboardOrgName.trim() || 'Optic Organization'}</span>).
+                      Brand icon generated for <span className="text-zinc-200 font-medium">{onboardOrgName.trim() || 'your organization'}</span>.
                     </p>
                   </div>
                 </div>
@@ -860,9 +802,6 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
             </div>
           </div>
         )}
-      </main>
-
-      <OpticFooter onNavigateSurface={onNavigateSurface} compact={true} />
 
       {/* Create Project Modal */}
       <Modal

@@ -1,12 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { OpticLogo } from '../brand/OpticLogo';
 import { Button } from '../common/Button';
 import { CodeBlock } from '../common/CodeBlock';
-import { OpticFooter } from '../common/OpticFooter';
 import { SurfaceType } from '../../types';
 import {
   BookOpen,
-  ArrowLeft,
   Terminal,
   HardDrive,
   Server,
@@ -168,39 +165,9 @@ export const DocsInterface: React.FC<DocsInterfaceProps> = ({ onNavigateSurface 
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-950 text-zinc-100 font-sans">
-      {/* Header */}
-      <header className="sticky top-0 z-30 h-14 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => onNavigateSurface('dashboard', '/dashboard')}
-            className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100 text-xs font-medium transition-colors"
-          >
-            <ArrowLeft size={14} />
-            <span className="hidden sm:inline">Dashboard</span>
-          </button>
-          <div className="h-4 w-px bg-zinc-800" />
-          <div className="flex items-center gap-2">
-            <OpticLogo size={20} showWordmark={true} surfaceLabel="Docs" />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => onNavigateSurface('main', '/')}
-            className="text-xs"
-          >
-            Home
-          </Button>
-        </div>
-      </header>
-
-      {/* Docs Body */}
-      <div className="flex-1 max-w-7xl mx-auto w-full flex">
-        {/* Sidebar */}
-        <aside className="w-64 border-r border-zinc-800/80 p-4 space-y-3 hidden md:block shrink-0">
+    <div className="w-full flex flex-col md:flex-row gap-6">
+      {/* Sidebar */}
+      <aside className="w-full md:w-56 border-b md:border-b-0 md:border-r border-zinc-800/80 pb-4 md:pb-0 md:pr-4 space-y-3 shrink-0">
           <div className="text-[11px] font-mono uppercase tracking-wider text-zinc-500 font-semibold px-2 mb-2">
             Documentation
           </div>
@@ -784,10 +751,6 @@ async function resilientDeploy(retries = 3): Promise<void> {
             </div>
           )}
         </main>
-      </div>
-
-      {/* Docs Footer */}
-      <OpticFooter onNavigateSurface={onNavigateSurface} />
     </div>
   );
 };

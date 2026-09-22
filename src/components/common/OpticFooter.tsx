@@ -74,10 +74,6 @@ export const OpticFooter: React.FC<OpticFooterProps> = ({
           <p className="text-xs text-zinc-400 max-w-sm leading-relaxed">
             Developer-first cloud storage and high-performance static hosting platform. S3-compatible buckets, edge deployment network, instant rollbacks, and zero configuration workflows.
           </p>
-          <div className="flex items-center gap-2 text-xs font-mono text-zinc-500">
-            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>All systems operational • Global Edge Active</span>
-          </div>
         </div>
 
         {/* Product */}

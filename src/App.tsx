@@ -222,6 +222,7 @@ function MainApp() {
             onGoHome={() => handleNavigateSurface('main', '/')}
           >
             <DashboardLayout
+              currentSurface="dashboard"
               currentTab={dashboardTab}
               onSelectTab={setDashboardTab}
               onNavigateSurface={handleNavigateSurface}
@@ -248,7 +249,12 @@ function MainApp() {
             }}
             onGoHome={() => handleNavigateSurface('main', '/')}
           >
-            <CloudInterface onNavigateSurface={handleNavigateSurface} />
+            <DashboardLayout
+              currentSurface="cloud"
+              onNavigateSurface={handleNavigateSurface}
+            >
+              <CloudInterface onNavigateSurface={handleNavigateSurface} />
+            </DashboardLayout>
           </AuthGate>
         )}
 
@@ -262,27 +268,42 @@ function MainApp() {
             }}
             onGoHome={() => handleNavigateSurface('main', '/')}
           >
-            <HostingInterface onNavigateSurface={handleNavigateSurface} />
+            <DashboardLayout
+              currentSurface="hosting"
+              onNavigateSurface={handleNavigateSurface}
+            >
+              <HostingInterface onNavigateSurface={handleNavigateSurface} />
+            </DashboardLayout>
           </AuthGate>
         )}
 
         {/* Public Docs */}
         {currentSurface === 'docs' && (
-          <DocsInterface onNavigateSurface={handleNavigateSurface} />
+          <DashboardLayout
+            currentSurface="docs"
+            onNavigateSurface={handleNavigateSurface}
+          >
+            <DocsInterface onNavigateSurface={handleNavigateSurface} />
+          </DashboardLayout>
         )}
 
         {/* Optic Developer API */}
         {currentSurface === 'api' && (
-          <ApiInterface
+          <DashboardLayout
+            currentSurface="api"
             onNavigateSurface={handleNavigateSurface}
-            onOpenAuth={(mode) => {
-              setRedirectTarget({ surface: 'api', path: '/api' });
-              handleNavigateSurface(
-                mode === 'signup' ? 'signup' : 'login',
-                mode === 'signup' ? '/signup' : '/login'
-              );
-            }}
-          />
+          >
+            <ApiInterface
+              onNavigateSurface={handleNavigateSurface}
+              onOpenAuth={(mode) => {
+                setRedirectTarget({ surface: 'api', path: '/api' });
+                handleNavigateSurface(
+                  mode === 'signup' ? 'signup' : 'login',
+                  mode === 'signup' ? '/signup' : '/login'
+                );
+              }}
+            />
+          </DashboardLayout>
         )}
 
         {/* Legal Pages */}

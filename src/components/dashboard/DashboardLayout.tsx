@@ -22,20 +22,42 @@ import {
 } from 'lucide-react';
 
 interface DashboardLayoutProps {
-  currentTab: 'overview' | 'keys' | 'settings';
-  onSelectTab: (tab: 'overview' | 'keys' | 'settings') => void;
+  currentSurface?: SurfaceType;
+  currentTab?: 'overview' | 'keys' | 'settings';
+  onSelectTab?: (tab: 'overview' | 'keys' | 'settings') => void;
   onNavigateSurface: (surface: SurfaceType, path?: string) => void;
   children: React.ReactNode;
 }
 
 export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
-  currentTab,
+  currentSurface = 'dashboard',
+  currentTab = 'overview',
   onSelectTab,
   onNavigateSurface,
   children,
 }) => {
   const { user, profile, signOut } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const isOverviewActive = (currentSurface === 'dashboard' || !currentSurface) && currentTab === 'overview';
+  const isCloudActive = currentSurface === 'cloud';
+  const isHostingActive = currentSurface === 'hosting';
+  const isKeysActive = (currentSurface === 'dashboard' || !currentSurface) && currentTab === 'keys';
+  const isApiActive = currentSurface === 'api';
+  const isDocsActive = currentSurface === 'docs';
+  const isSettingsActive = (currentSurface === 'dashboard' || !currentSurface) && currentTab === 'settings';
+
+  const getPageTitle = () => {
+    if (currentSurface === 'cloud') return 'Cloud Storage';
+    if (currentSurface === 'hosting') return 'Hosting & Deployments';
+    if (currentSurface === 'api') return 'Developer API';
+    if (currentSurface === 'docs') return 'Documentation';
+    if (currentTab === 'keys') return 'API Keys';
+    if (currentTab === 'settings') return 'Settings';
+    return 'Overview';
+  };
+
+  const isWideSurface = ['cloud', 'hosting', 'docs', 'api'].includes(currentSurface);
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
@@ -66,16 +88,19 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           {/* Overview */}
           <div>
             <button
-              onClick={() => onSelectTab('overview')}
+              onClick={() => {
+                if (onSelectTab) onSelectTab('overview');
+                onNavigateSurface('dashboard', '/dashboard');
+              }}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                currentTab === 'overview'
+                isOverviewActive
                   ? 'bg-zinc-800 text-white font-semibold'
                   : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'
               }`}
             >
               <LayoutDashboard
                 size={15}
-                className={currentTab === 'overview' ? 'text-white' : 'text-zinc-400'}
+                className={isOverviewActive ? 'text-white' : 'text-zinc-400'}
               />
               <span>Overview</span>
             </button>
@@ -87,21 +112,35 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               PRODUCTS
             </span>
             <button
-              onClick={() => onNavigateSurface('cloud', '/')}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 transition-colors"
+              onClick={() => onNavigateSurface('cloud', '/cloud')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                isCloudActive
+                  ? 'bg-zinc-800 text-white font-semibold'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'
+              }`}
             >
               <div className="flex items-center gap-2.5">
-                <HardDrive size={15} className="text-zinc-400" />
+                <HardDrive
+                  size={15}
+                  className={isCloudActive ? 'text-white' : 'text-zinc-400'}
+                />
                 <span>Cloud</span>
               </div>
             </button>
 
             <button
-              onClick={() => onNavigateSurface('hosting', '/')}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 transition-colors"
+              onClick={() => onNavigateSurface('hosting', '/hosting')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                isHostingActive
+                  ? 'bg-zinc-800 text-white font-semibold'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'
+              }`}
             >
               <div className="flex items-center gap-2.5">
-                <Globe size={15} className="text-zinc-400" />
+                <Globe
+                  size={15}
+                  className={isHostingActive ? 'text-white' : 'text-zinc-400'}
+                />
                 <span>Hosting</span>
               </div>
             </button>
@@ -113,36 +152,53 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               DEVELOPER
             </span>
             <button
-              onClick={() => onSelectTab('keys')}
+              onClick={() => {
+                if (onSelectTab) onSelectTab('keys');
+                onNavigateSurface('dashboard', '/dashboard/keys');
+              }}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                currentTab === 'keys'
+                isKeysActive
                   ? 'bg-zinc-800 text-white font-semibold'
                   : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'
               }`}
             >
               <Key
                 size={15}
-                className={currentTab === 'keys' ? 'text-white' : 'text-zinc-400'}
+                className={isKeysActive ? 'text-white' : 'text-zinc-400'}
               />
               <span>API Keys</span>
             </button>
 
             <button
-              onClick={() => onNavigateSurface('api', '/')}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 transition-colors"
+              onClick={() => onNavigateSurface('api', '/api')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                isApiActive
+                  ? 'bg-zinc-800 text-white font-semibold'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'
+              }`}
             >
               <div className="flex items-center gap-2.5">
-                <Code2 size={15} className="text-zinc-400" />
+                <Code2
+                  size={15}
+                  className={isApiActive ? 'text-white' : 'text-zinc-400'}
+                />
                 <span>API</span>
               </div>
             </button>
 
             <button
-              onClick={() => onNavigateSurface('docs', '/')}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 transition-colors"
+              onClick={() => onNavigateSurface('docs', '/docs')}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                isDocsActive
+                  ? 'bg-zinc-800 text-white font-semibold'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'
+              }`}
             >
               <div className="flex items-center gap-2.5">
-                <BookOpen size={15} className="text-zinc-400" />
+                <BookOpen
+                  size={15}
+                  className={isDocsActive ? 'text-white' : 'text-zinc-400'}
+                />
                 <span>Docs</span>
               </div>
             </button>
@@ -154,16 +210,19 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               ACCOUNT
             </span>
             <button
-              onClick={() => onSelectTab('settings')}
+              onClick={() => {
+                if (onSelectTab) onSelectTab('settings');
+                onNavigateSurface('dashboard', '/dashboard/settings');
+              }}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                currentTab === 'settings'
+                isSettingsActive
                   ? 'bg-zinc-800 text-white font-semibold'
                   : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900'
               }`}
             >
               <Settings
                 size={15}
-                className={currentTab === 'settings' ? 'text-white' : 'text-zinc-400'}
+                className={isSettingsActive ? 'text-white' : 'text-zinc-400'}
               />
               <span>Settings</span>
             </button>
@@ -213,7 +272,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
             </button>
             <span>•</span>
             <button
-              onClick={() => onNavigateSurface('docs', '/')}
+              onClick={() => onNavigateSurface('docs', '/docs')}
               className="hover:text-zinc-300 transition-colors"
             >
               Docs
@@ -235,35 +294,80 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               <Menu size={16} />
             </button>
 
-            <span className="text-xs font-medium text-zinc-300">
-              Dashboard
-            </span>
+            {/* Breadcrumb / Title */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-zinc-500 font-mono">optic</span>
+              <span className="text-zinc-700">/</span>
+              <span className="text-zinc-200 font-semibold">{getPageTitle()}</span>
+            </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onNavigateSurface('cloud', '/')}
-              className="text-xs py-1"
-            >
-              Cloud
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onNavigateSurface('hosting', '/')}
-              className="text-xs py-1"
-            >
-              Hosting
-            </Button>
+          {/* Quick switcher buttons */}
+          <div className="flex items-center gap-2">
+            <div className="hidden sm:flex items-center gap-1 p-1 rounded-lg bg-zinc-900/80 border border-zinc-800 text-xs">
+              <button
+                onClick={() => {
+                  if (onSelectTab) onSelectTab('overview');
+                  onNavigateSurface('dashboard', '/dashboard');
+                }}
+                className={`px-2.5 py-1 rounded-md transition-colors ${
+                  isOverviewActive
+                    ? 'bg-zinc-800 text-white font-medium shadow-xs'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Overview
+              </button>
+              <button
+                onClick={() => onNavigateSurface('cloud', '/cloud')}
+                className={`px-2.5 py-1 rounded-md transition-colors ${
+                  isCloudActive
+                    ? 'bg-zinc-800 text-white font-medium shadow-xs'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Cloud
+              </button>
+              <button
+                onClick={() => onNavigateSurface('hosting', '/hosting')}
+                className={`px-2.5 py-1 rounded-md transition-colors ${
+                  isHostingActive
+                    ? 'bg-zinc-800 text-white font-medium shadow-xs'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Hosting
+              </button>
+              <button
+                onClick={() => onNavigateSurface('docs', '/docs')}
+                className={`px-2.5 py-1 rounded-md transition-colors ${
+                  isDocsActive
+                    ? 'bg-zinc-800 text-white font-medium shadow-xs'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Docs
+              </button>
+              <button
+                onClick={() => onNavigateSurface('api', '/api')}
+                className={`px-2.5 py-1 rounded-md transition-colors ${
+                  isApiActive
+                    ? 'bg-zinc-800 text-white font-medium shadow-xs'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                API
+              </button>
+            </div>
           </div>
         </header>
 
         {/* Content View */}
         <main className="flex-1 overflow-y-auto bg-zinc-950 flex flex-col">
           <div className="p-4 sm:p-6 lg:p-8 flex-1">
-            <div className="max-w-5xl mx-auto">{children}</div>
+            <div className={isWideSurface ? 'max-w-7xl mx-auto w-full' : 'max-w-5xl mx-auto w-full'}>
+              {children}
+            </div>
           </div>
           <OpticFooter onNavigateSurface={onNavigateSurface} compact={true} />
         </main>
@@ -292,10 +396,15 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 <div>
                   <button
                     onClick={() => {
-                      onSelectTab('overview');
+                      if (onSelectTab) onSelectTab('overview');
+                      onNavigateSurface('dashboard', '/dashboard');
                       setMobileNavOpen(false);
                     }}
-                    className="w-full text-left p-2 rounded-lg hover:bg-zinc-900 flex items-center gap-2.5"
+                    className={`w-full text-left p-2 rounded-lg flex items-center gap-2.5 transition-colors ${
+                      isOverviewActive
+                        ? 'bg-zinc-800 text-white font-semibold'
+                        : 'hover:bg-zinc-900 text-zinc-300'
+                    }`}
                   >
                     <LayoutDashboard size={15} />
                     <span>Overview</span>
@@ -308,20 +417,28 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   </span>
                   <button
                     onClick={() => {
-                      onNavigateSurface('cloud', '/');
+                      onNavigateSurface('cloud', '/cloud');
                       setMobileNavOpen(false);
                     }}
-                    className="w-full text-left p-2 rounded-lg hover:bg-zinc-900 flex items-center gap-2.5 text-zinc-300"
+                    className={`w-full text-left p-2 rounded-lg flex items-center gap-2.5 transition-colors ${
+                      isCloudActive
+                        ? 'bg-zinc-800 text-white font-semibold'
+                        : 'hover:bg-zinc-900 text-zinc-300'
+                    }`}
                   >
                     <HardDrive size={15} />
                     <span>Cloud</span>
                   </button>
                   <button
                     onClick={() => {
-                      onNavigateSurface('hosting', '/');
+                      onNavigateSurface('hosting', '/hosting');
                       setMobileNavOpen(false);
                     }}
-                    className="w-full text-left p-2 rounded-lg hover:bg-zinc-900 flex items-center gap-2.5 text-zinc-300"
+                    className={`w-full text-left p-2 rounded-lg flex items-center gap-2.5 transition-colors ${
+                      isHostingActive
+                        ? 'bg-zinc-800 text-white font-semibold'
+                        : 'hover:bg-zinc-900 text-zinc-300'
+                    }`}
                   >
                     <Globe size={15} />
                     <span>Hosting</span>
@@ -334,30 +451,43 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   </span>
                   <button
                     onClick={() => {
-                      onSelectTab('keys');
+                      if (onSelectTab) onSelectTab('keys');
+                      onNavigateSurface('dashboard', '/dashboard/keys');
                       setMobileNavOpen(false);
                     }}
-                    className="w-full text-left p-2 rounded-lg hover:bg-zinc-900 flex items-center gap-2.5"
+                    className={`w-full text-left p-2 rounded-lg flex items-center gap-2.5 transition-colors ${
+                      isKeysActive
+                        ? 'bg-zinc-800 text-white font-semibold'
+                        : 'hover:bg-zinc-900 text-zinc-300'
+                    }`}
                   >
                     <Key size={15} />
                     <span>API Keys</span>
                   </button>
                   <button
                     onClick={() => {
-                      onNavigateSurface('api', '/');
+                      onNavigateSurface('api', '/api');
                       setMobileNavOpen(false);
                     }}
-                    className="w-full text-left p-2 rounded-lg hover:bg-zinc-900 flex items-center gap-2.5 text-zinc-300"
+                    className={`w-full text-left p-2 rounded-lg flex items-center gap-2.5 transition-colors ${
+                      isApiActive
+                        ? 'bg-zinc-800 text-white font-semibold'
+                        : 'hover:bg-zinc-900 text-zinc-300'
+                    }`}
                   >
-                    <Key size={15} />
+                    <Code2 size={15} />
                     <span>API</span>
                   </button>
                   <button
                     onClick={() => {
-                      onNavigateSurface('docs', '/');
+                      onNavigateSurface('docs', '/docs');
                       setMobileNavOpen(false);
                     }}
-                    className="w-full text-left p-2 rounded-lg hover:bg-zinc-900 flex items-center gap-2.5"
+                    className={`w-full text-left p-2 rounded-lg flex items-center gap-2.5 transition-colors ${
+                      isDocsActive
+                        ? 'bg-zinc-800 text-white font-semibold'
+                        : 'hover:bg-zinc-900 text-zinc-300'
+                    }`}
                   >
                     <BookOpen size={15} />
                     <span>Docs</span>
@@ -370,10 +500,15 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   </span>
                   <button
                     onClick={() => {
-                      onSelectTab('settings');
+                      if (onSelectTab) onSelectTab('settings');
+                      onNavigateSurface('dashboard', '/dashboard/settings');
                       setMobileNavOpen(false);
                     }}
-                    className="w-full text-left p-2 rounded-lg hover:bg-zinc-900 flex items-center gap-2.5"
+                    className={`w-full text-left p-2 rounded-lg flex items-center gap-2.5 transition-colors ${
+                      isSettingsActive
+                        ? 'bg-zinc-800 text-white font-semibold'
+                        : 'hover:bg-zinc-900 text-zinc-300'
+                    }`}
                   >
                     <Settings size={15} />
                     <span>Settings</span>

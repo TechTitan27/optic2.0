@@ -31,7 +31,7 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshSession: () => Promise<void>;
-  updateProfile: (fullName: string) => Promise<void>;
+  updateProfile: (fullName: string, avatarUrl?: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -354,12 +354,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const updateProfile = async (newFullName: string) => {
+  const updateProfile = async (newFullName: string, newAvatarUrl?: string) => {
     const cleanName = newFullName.trim();
     if (!cleanName) {
       throw new Error('Please enter a valid full name.');
     }
-    const { user: updatedUser } = await updateUserProfile(cleanName);
+    const { user: updatedUser } = await updateUserProfile(cleanName, newAvatarUrl);
     if (updatedUser) {
       syncUserFromSession(
         session

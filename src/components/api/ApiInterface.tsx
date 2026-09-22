@@ -1,12 +1,9 @@
 import React, { useState } from 'react';
 import { SurfaceType } from '../../types';
-import { OpticLogo } from '../brand/OpticLogo';
-import { OpticFooter } from '../common/OpticFooter';
 import { Button } from '../common/Button';
 import { CodeBlock } from '../common/CodeBlock';
 import { ApiKeysView } from '../dashboard/ApiKeysView';
 import { useAuth } from '../../context/AuthContext';
-import { getUserAvatarUrl } from '../../lib/avatar';
 import {
   Key,
   Code2,
@@ -21,7 +18,6 @@ import {
   ShieldCheck,
   Database,
   ArrowRight,
-  ArrowLeft,
 } from 'lucide-react';
 
 interface ApiInterfaceProps {
@@ -87,77 +83,9 @@ response = requests.get(f"{BASE_URL}/deployments", headers=headers)
 print(response.json())`;
 
   return (
-    <div className="min-h-screen bg-black text-zinc-100 flex flex-col font-sans selection:bg-zinc-800 selection:text-white">
-      {/* 1. Header Navigation Bar */}
-      <header className="h-14 border-b border-zinc-800/80 bg-zinc-950 px-4 sm:px-6 flex items-center justify-between shrink-0 sticky top-0 z-30">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => onNavigateSurface('dashboard', '/dashboard')}
-            className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100 text-xs font-medium transition-colors"
-          >
-            <ArrowLeft size={14} />
-            <span className="hidden sm:inline">Dashboard</span>
-          </button>
-          <div className="h-4 w-px bg-zinc-800" />
-          <div className="flex items-center gap-2">
-            <OpticLogo size={20} showWordmark={true} surfaceLabel="API" />
-          </div>
-        </div>
-
-        {/* Right side user status */}
-        <div className="flex items-center gap-3">
-          {user ? (
-            <div className="flex items-center gap-3">
-              <img
-                src={getUserAvatarUrl(user)}
-                alt={user.email || 'User'}
-                className="w-6 h-6 rounded-md object-cover border border-zinc-700/80 shrink-0 bg-zinc-800"
-              />
-              <span className="hidden sm:inline-block text-xs font-mono text-zinc-400">
-                {user.email}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onNavigateSurface('dashboard', '/dashboard')}
-                className="text-xs"
-              >
-                Dashboard
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={signOut}
-                className="text-xs text-zinc-400 hover:text-white"
-              >
-                Sign out
-              </Button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onOpenAuth ? onOpenAuth('signin') : onNavigateSurface('login', '/login')}
-                className="text-xs text-zinc-300 hover:text-white"
-              >
-                Log in
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => onOpenAuth ? onOpenAuth('signup') : onNavigateSurface('signup', '/signup')}
-                className="text-xs"
-              >
-                Get API Key
-              </Button>
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* 2. Main API Platform Body */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 space-y-8">
+    <div className="w-full space-y-8 font-sans selection:bg-zinc-800 selection:text-white">
+      {/* Main API Platform Body */}
+      <div className="space-y-8">
         {/* Subdomain Notice & Hero */}
         <div className="space-y-3">
           <h1 className="text-3xl font-bold tracking-tight text-white">
@@ -378,9 +306,7 @@ print(response.json())`;
             </div>
           </div>
         )}
-      </main>
-
-      <OpticFooter onNavigateSurface={onNavigateSurface} />
+      </div>
     </div>
   );
 };
