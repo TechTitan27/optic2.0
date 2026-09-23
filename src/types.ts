@@ -48,7 +48,6 @@ export interface FileItem {
   mimeType: string;
   sizeBytes: number;
   folderId?: string | null;
-  folderPath?: string;
   storageKey: string;
   storageProvider: 'r2' | 'supabase_storage' | 'mock';
   publicUrl?: string;
@@ -61,8 +60,7 @@ export interface FolderItem {
   id: string;
   name: string;
   parentId?: string | null;
-  path: string;
-  itemCount: number;
+  itemCount?: number;
   createdAt: string;
 }
 

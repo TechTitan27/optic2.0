@@ -4,6 +4,8 @@ import { Button } from '../common/Button';
 import { SurfaceType, FileItem, DeploymentItem, UsageStats } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { supabaseData } from '../../lib/supabaseData';
+import { ServiceStatus } from './ServiceStatus';
+import { OpticTrailerModal } from '../trailer/OpticTrailerModal';
 import {
   HardDrive,
   Globe,
@@ -16,6 +18,7 @@ import {
   Settings,
   User as UserIcon,
   ShieldCheck,
+  Play,
 } from 'lucide-react';
 
 interface OverviewViewProps {
@@ -41,6 +44,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
     apiRequestsLimit: 100000,
   });
   const [loading, setLoading] = useState(true);
+  const [isTrailerOpen, setIsTrailerOpen] = useState(false);
 
   // Time of day greeting
   const getGreeting = () => {
@@ -163,6 +167,15 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <Button
             size="sm"
             variant="outline"
+            onClick={() => setIsTrailerOpen(true)}
+            icon={<Play size={13} className="fill-rose-400 text-rose-400" />}
+            className="text-xs border-zinc-750 hover:bg-zinc-800"
+          >
+            Launch Reel (48s)
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => onSelectNav('keys')}
             icon={<Key size={14} />}
             className="text-xs"
@@ -248,6 +261,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <p className="text-[11px] text-zinc-500 mt-3 font-mono">Production live</p>
         </div>
       </div>
+
+      {/* Real-time Infrastructure Service Status */}
+      <ServiceStatus onNavigateSurface={onNavigateSurface} />
 
       {/* Cloud & Hosting Quick Launch Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -365,6 +381,13 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Cinematic Product Trailer Modal */}
+      <OpticTrailerModal
+        isOpen={isTrailerOpen}
+        onClose={() => setIsTrailerOpen(false)}
+        onNavigateSurface={onNavigateSurface}
+      />
     </div>
   );
 };

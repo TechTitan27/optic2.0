@@ -31,6 +31,7 @@ import {
   Edit2,
   AlertCircle,
   RefreshCw,
+  ArrowLeft,
   Info,
   ShieldCheck,
 } from 'lucide-react';
@@ -49,9 +50,84 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
   const [files, setFiles] = useState<FileItem[]>([]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [currentFolder, setCurrentFolder] = useState<FolderItem | null>(null);
+  const [folderBreadcrumbs, setFolderBreadcrumbs] = useState<FolderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Compute displayed folder path strictly in React from the folder hierarchy
+  const currentPathDisplay =
+    folderBreadcrumbs.length > 0
+      ? '/' + folderBreadcrumbs.map((b) => b.name).join('/')
+      : '/root';
+
+  // Sync folder query param to URL to preserve active folder across refresh
+  const updateUrlFolder = (folderId: string | null) => {
+    try {
+      const url = new URL(window.location.href);
+      if (folderId) {
+        url.searchParams.set('folder', folderId);
+      } else {
+        url.searchParams.delete('folder');
+      }
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // Ignore URL manipulation failures in isolated frames
+    }
+  };
+
+  const handleOpenFolder = (folder: FolderItem) => {
+    setFolderBreadcrumbs((prev) => [...prev, folder]);
+    setCurrentFolder(folder);
+    updateUrlFolder(folder.id);
+  };
+
+  const handleNavigateToRoot = () => {
+    setFolderBreadcrumbs([]);
+    setCurrentFolder(null);
+    updateUrlFolder(null);
+  };
+
+  const handleNavigateToBreadcrumb = (index: number) => {
+    const target = folderBreadcrumbs[index];
+    setFolderBreadcrumbs((prev) => prev.slice(0, index + 1));
+    setCurrentFolder(target);
+    updateUrlFolder(target.id);
+  };
+
+  const handleNavigateUp = () => {
+    if (folderBreadcrumbs.length > 1) {
+      const nextBreadcrumbs = folderBreadcrumbs.slice(0, -1);
+      const parent = nextBreadcrumbs[nextBreadcrumbs.length - 1];
+      setFolderBreadcrumbs(nextBreadcrumbs);
+      setCurrentFolder(parent);
+      updateUrlFolder(parent.id);
+    } else {
+      handleNavigateToRoot();
+    }
+  };
+
+  // Restore folder state from URL query param on load
+  useEffect(() => {
+    const restoreFolderFromUrl = async () => {
+      const userId = user?.id;
+      if (!userId) return;
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const folderId = params.get('folder');
+        if (folderId && (!currentFolder || currentFolder.id !== folderId)) {
+          const hierarchy = await supabaseData.getFolderHierarchy(userId, folderId);
+          if (hierarchy.length > 0) {
+            setFolderBreadcrumbs(hierarchy);
+            setCurrentFolder(hierarchy[hierarchy.length - 1]);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to restore folder from URL:', err);
+      }
+    };
+    restoreFolderFromUrl();
+  }, [user?.id]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'size' | 'updated'>('updated');
@@ -110,7 +186,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         setUsageStats(usageRes);
       }
     } catch (err: any) {
-      console.warn('Failed to load cloud files from Supabase:', err);
+      console.error('[CloudInterface] Failed to load cloud files from Supabase:', err);
       setErrorMessage(err?.message || 'Could not fetch files from database');
     } finally {
       setLoading(false);
@@ -138,7 +214,10 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
       for (const file of Array.from(selectedFiles)) {
         const meta = storageService.detectMimeType(file.name);
         // Call the isolated storage service
-        const uploadResult = await storageService.uploadFile(file, currentFolder?.path);
+        const uploadResult = await storageService.uploadFile(
+          file,
+          currentPathDisplay !== '/root' ? currentPathDisplay : undefined
+        );
 
         if (!uploadResult.success) {
           // Explicitly refuse to fake successful uploads
@@ -187,8 +266,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
       await supabaseData.createFolder(
         userId,
         newFolderName.trim(),
-        currentFolder?.id || null,
-        currentFolder?.path || ''
+        currentFolder?.id || null
       );
       toast.success(`Folder "${newFolderName.trim()}" created successfully.`, 'Folder Created');
       setNewFolderName('');
@@ -211,6 +289,13 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
       await supabaseData.renameFolder(userId, folderToRename.id, renameValue.trim());
       toast.success('Folder renamed successfully.', 'Folder Renamed');
       setRenameFolderModalOpen(false);
+      const newName = renameValue.trim();
+      setFolderBreadcrumbs((prev) =>
+        prev.map((b) => (b.id === folderToRename.id ? { ...b, name: newName } : b))
+      );
+      if (currentFolder?.id === folderToRename.id) {
+        setCurrentFolder((prev) => (prev ? { ...prev, name: newName } : null));
+      }
       setFolderToRename(null);
       setRenameValue('');
       await loadData();
@@ -227,12 +312,18 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
     try {
       await supabaseData.deleteFolder(userId, folder.id);
       toast.success(`Folder "${folder.name}" deleted.`, 'Folder Deleted');
-      if (currentFolder?.id === folder.id) {
-        setCurrentFolder(null);
+      const idx = folderBreadcrumbs.findIndex((b) => b.id === folder.id);
+      if (idx !== -1) {
+        const remaining = folderBreadcrumbs.slice(0, idx);
+        setFolderBreadcrumbs(remaining);
+        const nextFolder = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+        setCurrentFolder(nextFolder);
+        updateUrlFolder(nextFolder?.id || null);
       } else {
         await loadData();
       }
     } catch (err: any) {
+      console.error('[CloudInterface] Failed to delete folder:', err);
       toast.error(err?.message || 'Failed to delete folder.', 'Delete Error');
     }
   };
@@ -403,24 +494,43 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         {/* Navigation Breadcrumb Bar & Search */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl border border-zinc-800/80 bg-zinc-900/40">
           {/* Breadcrumbs */}
-          <div className="flex items-center gap-1.5 text-xs font-mono text-zinc-400">
+          <div className="flex items-center gap-1.5 text-xs font-mono text-zinc-400 overflow-x-auto py-0.5">
+            {folderBreadcrumbs.length > 0 && (
+              <button
+                onClick={handleNavigateUp}
+                className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors mr-0.5 shrink-0"
+                title="Go up to parent folder"
+                aria-label="Go up to parent folder"
+              >
+                <ArrowLeft size={13} />
+              </button>
+            )}
             <button
-              onClick={() => setCurrentFolder(null)}
-              className={`hover:text-white transition-colors ${
+              onClick={handleNavigateToRoot}
+              className={`hover:text-white transition-colors shrink-0 flex items-center gap-1 ${
                 !currentFolder ? 'text-sky-400 font-semibold' : ''
               }`}
             >
-              Root
+              <HardDrive size={13} className={!currentFolder ? 'text-sky-400' : 'text-zinc-500'} />
+              <span>Root</span>
             </button>
-            {currentFolder && (
-              <>
-                <ChevronRight size={13} className="text-zinc-600" />
-                <span className="text-white font-semibold flex items-center gap-1.5">
-                  <Folder size={13} className="text-sky-400" />
-                  {currentFolder.name}
-                </span>
-              </>
-            )}
+            {folderBreadcrumbs.map((crumb, idx) => {
+              const isCurrent = idx === folderBreadcrumbs.length - 1;
+              return (
+                <React.Fragment key={crumb.id}>
+                  <ChevronRight size={13} className="text-zinc-600 shrink-0" />
+                  <button
+                    onClick={() => handleNavigateToBreadcrumb(idx)}
+                    className={`flex items-center gap-1 shrink-0 hover:text-white transition-colors ${
+                      isCurrent ? 'text-white font-semibold' : 'text-zinc-400'
+                    }`}
+                  >
+                    <Folder size={13} className={isCurrent ? 'text-sky-400' : 'text-zinc-500'} />
+                    <span>{crumb.name}</span>
+                  </button>
+                </React.Fragment>
+              );
+            })}
           </div>
 
           {/* Search & Sort */}
@@ -501,7 +611,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
                   className="p-3.5 rounded-xl border border-zinc-800/80 bg-zinc-900/60 hover:bg-zinc-900 hover:border-zinc-700/80 text-left transition-all flex items-center justify-between group"
                 >
                   <button
-                    onClick={() => setCurrentFolder(folder)}
+                    onClick={() => handleOpenFolder(folder)}
                     className="flex items-center gap-2.5 min-w-0 flex-1 text-left"
                   >
                     <Folder size={18} className="text-sky-400 group-hover:scale-105 transition-transform shrink-0" />
@@ -543,8 +653,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         <div className="space-y-2">
           <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500 uppercase tracking-wider font-semibold">
             <span>
-              Files ({filteredFiles.length})
-              {currentFolder ? ` in /${currentFolder.name}` : ' in /root'}
+              Files ({filteredFiles.length}) in {currentPathDisplay}
             </span>
           </div>
 
@@ -720,7 +829,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
           <div className="text-[10px] text-zinc-500 font-mono bg-zinc-950 p-2.5 rounded-lg border border-zinc-800/80">
             Target Destination:{' '}
             <span className="text-zinc-300">
-              {currentFolder ? currentFolder.path : '/root'}
+              {currentPathDisplay}
             </span>
           </div>
         </div>

@@ -16,6 +16,7 @@ import {
   Shield,
   Layers,
   Zap,
+  Sparkles,
 } from 'lucide-react';
 
 interface LandingPageProps {
@@ -97,7 +98,7 @@ npx optic deployments --project my-portfolio`,
       <Navbar onNavigateSurface={onNavigateSurface} onOpenAuth={onOpenAuth} />
 
       {/* 2. Hero Section */}
-      <section className="pt-20 pb-16 sm:pt-28 sm:pb-24 px-4 sm:px-6 max-w-5xl mx-auto text-center">
+      <section className="pt-16 pb-12 sm:pt-24 sm:pb-16 px-4 sm:px-6 max-w-5xl mx-auto text-center">
         <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-white max-w-3xl mx-auto leading-[1.15]">
           Cloud infrastructure for developers.
         </h1>

@@ -5,7 +5,6 @@ import {
   FolderItem,
   UsageStats,
   Organization,
-  OrganizationMember,
   HostingProject,
   DeploymentItem,
   DomainItem,
@@ -25,7 +24,7 @@ export interface FileRecordInput {
 
 export const supabaseData = {
   /**
-   * Fetch usage statistics for the authenticated user from the `usage` table
+   * Fetch usage statistics for the authenticated user from the real `public.usage` table
    */
   async getUserUsage(userId: string): Promise<UsageStats> {
     const defaultStats: UsageStats = {
@@ -43,35 +42,46 @@ export const supabaseData = {
     if (!sb || !userId) return defaultStats;
 
     try {
-      // Query the `usage` table for this user
       const { data, error } = await sb
         .from('usage')
         .select('*')
         .eq('user_id', userId)
         .maybeSingle();
 
-      if (!error && data) {
+      if (error) {
+        console.error('[Supabase] Error querying public.usage table:', error);
+      }
+
+      if (data) {
         return {
           ...defaultStats,
-          storageUsedBytes: Number(data.storage_used_bytes || data.storage_used || 0),
-          storageLimitBytes: Number(data.storage_limit_bytes || data.storage_limit || defaultStats.storageLimitBytes),
-          bandwidthUsedBytes: Number(data.bandwidth_used_bytes || data.bandwidth_used || 0),
-          bandwidthLimitBytes: Number(data.bandwidth_limit_bytes || data.bandwidth_limit || defaultStats.bandwidthLimitBytes),
+          storageUsedBytes: Number(data.storage_used_bytes || 0),
+          storageLimitBytes: Number(data.storage_limit_bytes || defaultStats.storageLimitBytes),
+          bandwidthUsedBytes: Number(data.bandwidth_used_bytes || 0),
+          bandwidthLimitBytes: Number(data.bandwidth_limit_bytes || defaultStats.bandwidthLimitBytes),
+          deploymentsThisMonth: Number(data.deployments_this_month || 1),
+          deploymentsLimit: Number(data.deployments_limit || defaultStats.deploymentsLimit),
+          apiRequestsThisMonth: Number(data.api_requests_this_month || 0),
+          apiRequestsLimit: Number(data.api_requests_limit || defaultStats.apiRequestsLimit),
         };
       }
 
-      // If no usage record found yet, compute storage from existing files
-      const { data: userFiles } = await sb
+      // Compute total storage from existing files in public.files
+      const { data: userFiles, error: filesErr } = await sb
         .from('files')
         .select('size_bytes')
         .eq('user_id', userId);
+
+      if (filesErr) {
+        console.error('[Supabase] Error querying file sizes for usage calculation:', filesErr);
+      }
 
       const computedBytes = (userFiles || []).reduce(
         (acc: number, f: any) => acc + (Number(f.size_bytes) || 0),
         0
       );
 
-      // Attempt to upsert the initial usage row
+      // Attempt to initialize usage row
       try {
         await sb.from('usage').upsert({
           user_id: userId,
@@ -79,9 +89,13 @@ export const supabaseData = {
           storage_limit_bytes: defaultStats.storageLimitBytes,
           bandwidth_used_bytes: 0,
           bandwidth_limit_bytes: defaultStats.bandwidthLimitBytes,
+          deployments_this_month: 1,
+          deployments_limit: defaultStats.deploymentsLimit,
+          api_requests_this_month: 0,
+          api_requests_limit: defaultStats.apiRequestsLimit,
         });
-      } catch {
-        // ignore upsert error
+      } catch (upsertErr) {
+        console.warn('[Supabase] Usage row initialization warning:', upsertErr);
       }
 
       return {
@@ -89,13 +103,13 @@ export const supabaseData = {
         storageUsedBytes: computedBytes,
       };
     } catch (err) {
-      console.warn('Error fetching usage from Supabase:', err);
+      console.error('[Supabase] Unexpected exception in getUserUsage:', err);
       return defaultStats;
     }
   },
 
   /**
-   * Fetch recent files for overview dashboard from `files` table
+   * Fetch recent files for overview dashboard from `public.files` table
    */
   async getRecentFiles(userId: string, limit = 4): Promise<FileItem[]> {
     const sb = getSupabase();
@@ -110,7 +124,7 @@ export const supabaseData = {
         .limit(limit);
 
       if (error) {
-        console.warn('Error fetching recent files:', error);
+        console.error('[Supabase] Error fetching recent files from public.files:', error);
         return [];
       }
 
@@ -118,160 +132,244 @@ export const supabaseData = {
         id: f.id,
         name: f.name,
         extension: f.extension || (f.name?.includes('.') ? f.name.split('.').pop()?.toUpperCase() : ''),
-        mimeType: f.mime_type || f.mimeType || 'application/octet-stream',
-        sizeBytes: Number(f.size_bytes || f.sizeBytes || 0),
-        folderId: f.folder_id || f.folderId || null,
-        storageKey: f.storage_key || f.storageKey || '',
-        storageProvider: f.storage_provider || f.storageProvider || 'r2',
-        publicUrl: f.public_url || f.publicUrl,
-        createdAt: f.created_at || f.createdAt || new Date().toISOString(),
-        updatedAt: f.updated_at || f.updatedAt || f.created_at || new Date().toISOString(),
-        isPublic: f.is_public ?? f.isPublic ?? true,
+        mimeType: f.mime_type || 'application/octet-stream',
+        sizeBytes: Number(f.size_bytes || 0),
+        folderId: f.folder_id || null,
+        storageKey: f.storage_key || '',
+        storageProvider: f.storage_provider || 'r2',
+        publicUrl: f.public_url || undefined,
+        createdAt: f.created_at || new Date().toISOString(),
+        updatedAt: f.updated_at || f.created_at || new Date().toISOString(),
+        isPublic: f.is_public ?? true,
       }));
     } catch (err) {
-      console.warn('Error in getRecentFiles:', err);
+      console.error('[Supabase] Unexpected exception in getRecentFiles:', err);
       return [];
     }
   },
 
   /**
-   * List files and folders for a specific folder from `files` & `folders` tables
+   * List folders and files from `public.folders` and `public.files`.
+   * Columns in public.folders: id, user_id, parent_id, name, created_at.
+   * Root level uses parent_id = null; nested level uses parent_id = folderId.
    */
   async getFilesAndFolders(
     userId: string,
-    folderId: string | null
+    folderId: string | null = null
   ): Promise<{ files: FileItem[]; folders: FolderItem[] }> {
     const sb = getSupabase();
-    if (!sb || !userId) return { files: [], folders: [] };
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in getFilesAndFolders.');
+      throw new Error('Supabase client is not available. Please verify configuration.');
+    }
+    if (!userId) {
+      return { files: [], folders: [] };
+    }
+
+    console.log(`[Supabase] Listing files and folders for user ${userId}, folderId: ${folderId}`);
+
+    // 1. Fetch folders for current level
+    let foldersQuery = sb
+      .from('folders')
+      .select('id, user_id, parent_id, name, created_at')
+      .eq('user_id', userId)
+      .order('name', { ascending: true });
+
+    if (folderId) {
+      foldersQuery = foldersQuery.eq('parent_id', folderId);
+    } else {
+      foldersQuery = foldersQuery.is('parent_id', null);
+    }
+
+    // 2. Fetch files for current level
+    let filesQuery = sb
+      .from('files')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (folderId) {
+      filesQuery = filesQuery.eq('folder_id', folderId);
+    } else {
+      filesQuery = filesQuery.is('folder_id', null);
+    }
+
+    const [foldersRes, filesRes] = await Promise.all([foldersQuery, filesQuery]);
+
+    if (foldersRes.error) {
+      console.error('[Supabase] Error listing public.folders:', foldersRes.error);
+      throw foldersRes.error;
+    }
+    if (filesRes.error) {
+      console.error('[Supabase] Error listing public.files:', filesRes.error);
+      throw filesRes.error;
+    }
+
+    const mappedFolders: FolderItem[] = (foldersRes.data || []).map((fd: any) => ({
+      id: fd.id,
+      name: fd.name,
+      parentId: fd.parent_id || null,
+      itemCount: 0,
+      createdAt: fd.created_at || new Date().toISOString(),
+    }));
+
+    const mappedFiles: FileItem[] = (filesRes.data || []).map((f: any) => ({
+      id: f.id,
+      name: f.name,
+      extension: f.extension || (f.name?.includes('.') ? f.name.split('.').pop()?.toUpperCase() : ''),
+      mimeType: f.mime_type || 'application/octet-stream',
+      sizeBytes: Number(f.size_bytes || 0),
+      folderId: f.folder_id || null,
+      storageKey: f.storage_key || '',
+      storageProvider: f.storage_provider || 'r2',
+      publicUrl: f.public_url || undefined,
+      createdAt: f.created_at || new Date().toISOString(),
+      updatedAt: f.updated_at || f.created_at || new Date().toISOString(),
+      isPublic: f.is_public ?? true,
+    }));
+
+    return { files: mappedFiles, folders: mappedFolders };
+  },
+
+  /**
+   * Reconstruct folder hierarchy / breadcrumb chain from Supabase using parent_id links.
+   * Returns array ordered from root ancestor down to target folder.
+   */
+  async getFolderHierarchy(userId: string, targetFolderId: string): Promise<FolderItem[]> {
+    const sb = getSupabase();
+    if (!sb || !userId || !targetFolderId) return [];
 
     try {
-      // 1. Fetch folders
-      let foldersQuery = sb
+      const { data, error } = await sb
         .from('folders')
-        .select('*')
-        .eq('user_id', userId)
-        .order('name', { ascending: true });
+        .select('id, user_id, parent_id, name, created_at')
+        .eq('user_id', userId);
 
-      if (folderId) {
-        foldersQuery = foldersQuery.eq('parent_id', folderId);
-      } else {
-        foldersQuery = foldersQuery.is('parent_id', null);
+      if (error || !data) return [];
+
+      const folderMap = new Map<string, FolderItem>();
+      for (const item of data) {
+        folderMap.set(item.id, {
+          id: item.id,
+          name: item.name,
+          parentId: item.parent_id || null,
+          itemCount: 0,
+          createdAt: item.created_at || new Date().toISOString(),
+        });
       }
 
-      // 2. Fetch files
-      let filesQuery = sb
-        .from('files')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
+      const hierarchy: FolderItem[] = [];
+      let currId: string | null = targetFolderId;
+      const visited = new Set<string>();
 
-      if (folderId) {
-        filesQuery = filesQuery.eq('folder_id', folderId);
-      } else {
-        filesQuery = filesQuery.is('folder_id', null);
+      while (currId && folderMap.has(currId) && !visited.has(currId)) {
+        visited.add(currId);
+        const folder: FolderItem | undefined = folderMap.get(currId);
+        if (!folder) break;
+        hierarchy.unshift(folder);
+        currId = folder.parentId || null;
       }
 
-      const [foldersRes, filesRes] = await Promise.all([foldersQuery, filesQuery]);
-
-      if (foldersRes.error) {
-        console.warn('Error querying folders:', foldersRes.error);
-      }
-      if (filesRes.error) {
-        console.warn('Error querying files:', filesRes.error);
-      }
-
-      const mappedFiles: FileItem[] = (filesRes.data || []).map((f: any) => ({
-        id: f.id,
-        name: f.name,
-        extension: f.extension || (f.name?.includes('.') ? f.name.split('.').pop()?.toUpperCase() : ''),
-        mimeType: f.mime_type || f.mimeType || 'application/octet-stream',
-        sizeBytes: Number(f.size_bytes || f.sizeBytes || 0),
-        folderId: f.folder_id || f.folderId || null,
-        storageKey: f.storage_key || f.storageKey || '',
-        storageProvider: f.storage_provider || f.storageProvider || 'r2',
-        publicUrl: f.public_url || f.publicUrl,
-        createdAt: f.created_at || f.createdAt || new Date().toISOString(),
-        updatedAt: f.updated_at || f.updatedAt || f.created_at || new Date().toISOString(),
-        isPublic: f.is_public ?? f.isPublic ?? true,
-      }));
-
-      const mappedFolders: FolderItem[] = (foldersRes.data || []).map((fd: any) => ({
-        id: fd.id,
-        name: fd.name,
-        parentId: fd.parent_id || fd.parentId || null,
-        path: fd.path || `/${fd.name}`,
-        itemCount: 0,
-        createdAt: fd.created_at || fd.createdAt || new Date().toISOString(),
-      }));
-
-      return { files: mappedFiles, folders: mappedFolders };
+      return hierarchy;
     } catch (err) {
-      console.warn('Error fetching files and folders from Supabase:', err);
-      return { files: [], folders: [] };
+      console.warn('[Supabase] Failed to resolve folder hierarchy:', err);
+      return [];
     }
   },
 
   /**
-   * Create folder in `folders` table
+   * Create folder in `public.folders` table.
+   * Exact schema: id (uuid), user_id (uuid), parent_id (uuid | null), name (text), created_at (timestamptz).
+   * Root folders use parent_id = null. Nested folders use the parent folder's UUID.
    */
   async createFolder(
     userId: string,
     name: string,
-    parentId: string | null = null,
-    parentPath: string = ''
+    parentId: string | null = null
   ): Promise<FolderItem> {
     const sb = getSupabase();
-    if (!sb) throw new Error('Supabase client is not available.');
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in createFolder.');
+      throw new Error('Supabase client is not available. Please verify configuration.');
+    }
 
     const cleanName = name.trim();
-    const path = parentPath ? `${parentPath}/${cleanName}` : `/${cleanName}`;
+    if (!cleanName) {
+      throw new Error('Folder name cannot be empty.');
+    }
+
+    const cleanParentId = parentId || null;
+
+    console.log('[Supabase] Creating folder in public.folders:', {
+      user_id: userId,
+      name: cleanName,
+      parent_id: cleanParentId,
+    });
 
     const { data, error } = await sb
       .from('folders')
       .insert({
         user_id: userId,
         name: cleanName,
-        parent_id: parentId,
-        path,
+        parent_id: cleanParentId,
       })
-      .select()
+      .select('id, user_id, parent_id, name, created_at')
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('[Supabase] Error creating folder in public.folders:', error);
+      throw error;
+    }
 
     return {
       id: data.id,
       name: data.name,
       parentId: data.parent_id,
-      path: data.path,
       itemCount: 0,
       createdAt: data.created_at,
     };
   },
 
   /**
-   * Rename folder in `folders` table
+   * Rename folder in `public.folders` table
    */
   async renameFolder(userId: string, folderId: string, newName: string): Promise<void> {
     const sb = getSupabase();
-    if (!sb) throw new Error('Supabase client is not available.');
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in renameFolder.');
+      throw new Error('Supabase client is not available.');
+    }
 
     const cleanName = newName.trim();
+    if (!cleanName) {
+      throw new Error('Folder name cannot be empty.');
+    }
+
+    console.log('[Supabase] Renaming folder in public.folders:', { folderId, cleanName, userId });
+
     const { error } = await sb
       .from('folders')
       .update({ name: cleanName })
       .eq('id', folderId)
       .eq('user_id', userId);
 
-    if (error) throw error;
+    if (error) {
+      console.error('[Supabase] Error renaming folder in public.folders:', error);
+      throw error;
+    }
   },
 
   /**
-   * Delete folder in `folders` table
+   * Delete folder in `public.folders` table
    */
   async deleteFolder(userId: string, folderId: string): Promise<void> {
     const sb = getSupabase();
-    if (!sb) throw new Error('Supabase client is not available.');
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in deleteFolder.');
+      throw new Error('Supabase client is not available.');
+    }
+
+    console.log('[Supabase] Deleting folder in public.folders:', { folderId, userId });
 
     const { error } = await sb
       .from('folders')
@@ -279,15 +377,31 @@ export const supabaseData = {
       .eq('id', folderId)
       .eq('user_id', userId);
 
-    if (error) throw error;
+    if (error) {
+      console.error('[Supabase] Error deleting folder from public.folders:', error);
+      throw error;
+    }
   },
 
   /**
-   * Save newly uploaded file record in `files` table & update `usage` table
+   * Insert file record into `public.files` metadata table & update `public.usage`.
+   * File bytes are stored in Cloudflare R2 / storage adapter; ONLY metadata is stored in Supabase Postgres.
    */
   async insertFileRecord(userId: string, input: FileRecordInput): Promise<FileItem> {
     const sb = getSupabase();
-    if (!sb) throw new Error('Supabase client is not available.');
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in insertFileRecord.');
+      throw new Error('Supabase client is not available.');
+    }
+
+    console.log('[Supabase] Inserting file metadata into public.files:', {
+      user_id: userId,
+      name: input.name,
+      size_bytes: input.sizeBytes,
+      folder_id: input.folderId,
+      storage_key: input.storageKey,
+      storage_provider: input.storageProvider,
+    });
 
     const { data, error } = await sb
       .from('files')
@@ -306,33 +420,46 @@ export const supabaseData = {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('[Supabase] Error inserting file metadata into public.files:', error);
+      throw error;
+    }
 
-    // Update usage table storage
+    // Update usage table storage count
     try {
-      const { data: usageRow } = await sb
+      const { data: usageRow, error: uFetchErr } = await sb
         .from('usage')
         .select('id, storage_used_bytes')
         .eq('user_id', userId)
         .maybeSingle();
 
+      if (uFetchErr) {
+        console.warn('[Supabase] Usage lookup warning:', uFetchErr);
+      }
+
       if (usageRow) {
         const updatedBytes = Math.max(0, (Number(usageRow.storage_used_bytes) || 0) + input.sizeBytes);
-        await sb
+        const { error: uUpErr } = await sb
           .from('usage')
           .update({ storage_used_bytes: updatedBytes })
           .eq('id', usageRow.id);
+        if (uUpErr) console.warn('[Supabase] Usage update warning:', uUpErr);
       } else {
-        await sb.from('usage').insert({
+        const { error: uInErr } = await sb.from('usage').insert({
           user_id: userId,
           storage_used_bytes: input.sizeBytes,
           storage_limit_bytes: 10 * 1024 * 1024 * 1024,
           bandwidth_used_bytes: 0,
           bandwidth_limit_bytes: 50 * 1024 * 1024 * 1024,
+          deployments_this_month: 1,
+          deployments_limit: 100,
+          api_requests_this_month: 0,
+          api_requests_limit: 100000,
         });
+        if (uInErr) console.warn('[Supabase] Usage insert warning:', uInErr);
       }
     } catch (uErr) {
-      console.warn('Usage update notification:', uErr);
+      console.warn('[Supabase] Usage stats update notification:', uErr);
     }
 
     return {
@@ -352,11 +479,16 @@ export const supabaseData = {
   },
 
   /**
-   * Delete file from `files` table & update `usage` table
+   * Delete file metadata from `public.files` & decrement `public.usage`
    */
   async deleteFile(userId: string, fileId: string, sizeBytes = 0): Promise<void> {
     const sb = getSupabase();
-    if (!sb) throw new Error('Supabase client is not available.');
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in deleteFile.');
+      throw new Error('Supabase client is not available.');
+    }
+
+    console.log('[Supabase] Deleting file from public.files:', { fileId, userId });
 
     const { error } = await sb
       .from('files')
@@ -364,7 +496,10 @@ export const supabaseData = {
       .eq('id', fileId)
       .eq('user_id', userId);
 
-    if (error) throw error;
+    if (error) {
+      console.error('[Supabase] Error deleting file from public.files:', error);
+      throw error;
+    }
 
     // Decrement usage
     if (sizeBytes > 0) {
@@ -383,13 +518,13 @@ export const supabaseData = {
             .eq('id', usageRow.id);
         }
       } catch (uErr) {
-        console.warn('Usage decrement notification:', uErr);
+        console.warn('[Supabase] Usage decrement notification:', uErr);
       }
     }
   },
 
   /**
-   * Create or fetch share link in `share_links` table
+   * Create share link in `public.share_links` table
    */
   async createShareLink(
     userId: string,
@@ -397,7 +532,10 @@ export const supabaseData = {
     expiresInHours = 48
   ): Promise<{ shareUrl: string; token: string; expiresAt: string }> {
     const sb = getSupabase();
-    if (!sb) throw new Error('Supabase client is not available.');
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in createShareLink.');
+      throw new Error('Supabase client is not available.');
+    }
 
     const token =
       typeof crypto !== 'undefined' && crypto.randomUUID
@@ -405,6 +543,8 @@ export const supabaseData = {
         : Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 
     const expiresAt = new Date(Date.now() + expiresInHours * 3600000).toISOString();
+
+    console.log('[Supabase] Creating share link in public.share_links for file:', fileId);
 
     const { data, error } = await sb
       .from('share_links')
@@ -417,7 +557,10 @@ export const supabaseData = {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('[Supabase] Error inserting share link in public.share_links:', error);
+      throw error;
+    }
 
     const origin = typeof window !== 'undefined' ? window.location.origin : 'https://optic.doy.best';
     return {
@@ -429,15 +572,18 @@ export const supabaseData = {
 
   // ==========================================
   // ORGANIZATIONS & HOSTING DATA OPERATIONS
+  // (Uses REAL Supabase tables: organizations,
+  // organization_members, projects, deployments, domains)
   // ==========================================
 
   /**
-   * Get all organizations that the user belongs to.
-   * Checks `organization_members` joined with `organizations`.
+   * Get all organizations that the user belongs to from `public.organizations`
    */
   async getUserOrganizations(userId: string): Promise<Organization[]> {
     const sb = getSupabase();
     if (!sb || !userId) return [];
+
+    console.log('[Supabase] Querying organizations for user:', userId);
 
     try {
       // 1. Fetch organization memberships for this user
@@ -445,6 +591,10 @@ export const supabaseData = {
         .from('organization_members')
         .select('organization_id, role, organizations (*)')
         .eq('user_id', userId);
+
+      if (memberErr) {
+        console.error('[Supabase] Error querying public.organization_members:', memberErr);
+      }
 
       if (!memberErr && memberRows && memberRows.length > 0) {
         return memberRows
@@ -460,178 +610,136 @@ export const supabaseData = {
           }));
       }
 
-      // If join syntax varies or returns flat, try querying organizations directly
+      // Query organizations created by user directly
       const { data: directOrgs, error: orgErr } = await sb
         .from('organizations')
         .select('*')
         .eq('created_by', userId);
 
-      if (!orgErr && directOrgs && directOrgs.length > 0) {
-        return directOrgs.map((o: any) => ({
-          id: o.id,
-          name: o.name,
-          slug: o.slug,
-          created_by: o.created_by,
-          created_at: o.created_at,
-          avatarUrl: o.avatar_url || getDiceBearOrgAvatarUrl(o.name),
-          role: 'owner',
-        }));
+      if (orgErr) {
+        console.error('[Supabase] Error querying direct public.organizations:', orgErr);
+        throw orgErr;
       }
+
+      return (directOrgs || []).map((o: any) => ({
+        id: o.id,
+        name: o.name,
+        slug: o.slug,
+        created_by: o.created_by,
+        created_at: o.created_at,
+        avatarUrl: o.avatar_url || getDiceBearOrgAvatarUrl(o.name),
+        role: 'owner',
+      }));
     } catch (err) {
-      console.warn('Supabase organizations fetch notice:', err);
+      console.error('[Supabase] Error in getUserOrganizations:', err);
+      throw err;
     }
-
-    // Fallback to locally stored real organizations if table is being created
-    try {
-      const key = `optic_orgs_${userId}`;
-      const local = localStorage.getItem(key);
-      if (local) {
-        return JSON.parse(local);
-      }
-    } catch {
-      // ignore
-    }
-
-    return [];
   },
 
   /**
-   * Create a new organization.
-   * Creator automatically becomes 'owner'.
+   * Create a new organization in `public.organizations` and member in `public.organization_members`
    */
   async createOrganization(userId: string, name: string, customSlug?: string): Promise<Organization> {
     const sb = getSupabase();
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in createOrganization.');
+      throw new Error('Supabase client is not available.');
+    }
+
     const cleanName = name.trim();
     const baseSlug = (customSlug || cleanName)
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '') || 'org';
     const slug = `${baseSlug}-${Math.random().toString(36).substring(2, 6)}`;
-
     const orgAvatarUrl = getDiceBearOrgAvatarUrl(cleanName);
-    let newOrg: Organization | null = null;
 
-    if (sb) {
-      try {
-        const { data: orgData, error: orgErr } = await sb
-          .from('organizations')
-          .insert({
-            name: cleanName,
-            slug,
-            created_by: userId,
-            avatar_url: orgAvatarUrl,
-          })
-          .select()
-          .single();
+    console.log('[Supabase] Creating organization in public.organizations:', {
+      name: cleanName,
+      slug,
+      created_by: userId,
+    });
 
-        if (!orgErr && orgData) {
-          // Add creator as owner in organization_members
-          try {
-            await sb.from('organization_members').insert({
-              organization_id: orgData.id,
-              user_id: userId,
-              role: 'owner',
-            });
-          } catch (memErr) {
-            console.warn('Membership insert warning:', memErr);
-          }
-
-          newOrg = {
-            id: orgData.id,
-            name: orgData.name,
-            slug: orgData.slug,
-            created_by: orgData.created_by,
-            created_at: orgData.created_at,
-            avatarUrl: orgData.avatar_url || orgAvatarUrl,
-            role: 'owner',
-          };
-        }
-      } catch (err) {
-        console.warn('Supabase organization create fallback:', err);
-      }
-    }
-
-    if (!newOrg) {
-      // Client-side fallback if table is not yet migrated in Supabase
-      const generatedId = typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `org_${Math.random().toString(36).substring(2, 10)}`;
-
-      newOrg = {
-        id: generatedId,
+    const { data: orgData, error: orgErr } = await sb
+      .from('organizations')
+      .insert({
         name: cleanName,
         slug,
         created_by: userId,
-        created_at: new Date().toISOString(),
-        avatarUrl: orgAvatarUrl,
-        role: 'owner',
-      };
+        avatar_url: orgAvatarUrl,
+      })
+      .select()
+      .single();
+
+    if (orgErr) {
+      console.error('[Supabase] Error inserting organization into public.organizations:', orgErr);
+      throw orgErr;
     }
 
-    // Sync to local user storage
+    // Add creator as owner in organization_members
     try {
-      const key = `optic_orgs_${userId}`;
-      const existing = JSON.parse(localStorage.getItem(key) || '[]');
-      existing.unshift(newOrg);
-      localStorage.setItem(key, JSON.stringify(existing));
-    } catch {
-      // ignore
+      const { error: memErr } = await sb.from('organization_members').insert({
+        organization_id: orgData.id,
+        user_id: userId,
+        role: 'owner',
+      });
+      if (memErr) {
+        console.warn('[Supabase] Membership insert warning:', memErr);
+      }
+    } catch (memEx) {
+      console.warn('[Supabase] Membership insert exception:', memEx);
     }
 
-    return newOrg;
+    return {
+      id: orgData.id,
+      name: orgData.name,
+      slug: orgData.slug,
+      created_by: orgData.created_by,
+      created_at: orgData.created_at,
+      avatarUrl: orgData.avatar_url || orgAvatarUrl,
+      role: 'owner',
+    };
   },
 
   /**
-   * Get all hosting projects belonging to an organization.
+   * Get all hosting projects belonging to an organization from `public.projects`
    */
   async getHostingProjects(orgId: string): Promise<HostingProject[]> {
     const sb = getSupabase();
     if (!sb || !orgId) return [];
 
-    try {
-      const { data, error } = await sb
-        .from('hosting_projects')
-        .select('*')
-        .eq('organization_id', orgId)
-        .order('created_at', { ascending: false });
+    console.log('[Supabase] Querying public.projects for organization:', orgId);
 
-      if (!error && data) {
-        return data.map((p: any) => ({
-          id: p.id,
-          organization_id: p.organization_id || orgId,
-          name: p.name,
-          slug: p.slug,
-          framework: p.framework || 'react',
-          productionDomain: p.production_domain || `https://${p.slug}.optic.doy.best`,
-          assignedSubdomain: p.assigned_subdomain || `${p.slug}.optic.doy.best`,
-          customDomains: p.custom_domains || [],
-          gitRepo: p.git_repo || undefined,
-          gitBranch: p.git_branch || 'main',
-          status: p.status || 'ready',
-          createdAt: p.created_at || new Date().toISOString(),
-          updatedAt: p.updated_at || new Date().toISOString(),
-        }));
-      }
-    } catch (err) {
-      console.warn('Hosting projects fetch notice:', err);
+    const { data, error } = await sb
+      .from('projects')
+      .select('*')
+      .eq('organization_id', orgId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[Supabase] Error querying public.projects:', error);
+      throw error;
     }
 
-    // Local fallback per organization
-    try {
-      const key = `optic_projects_${orgId}`;
-      const stored = localStorage.getItem(key);
-      if (stored) {
-        return JSON.parse(stored);
-      }
-    } catch {
-      // ignore
-    }
-
-    return [];
+    return (data || []).map((p: any) => ({
+      id: p.id,
+      organization_id: p.organization_id || orgId,
+      name: p.name,
+      slug: p.slug,
+      framework: p.framework || 'react',
+      productionDomain: p.production_domain || `https://${p.slug}.optic.doy.best`,
+      assignedSubdomain: p.assigned_subdomain || `${p.slug}.optic.doy.best`,
+      customDomains: p.custom_domains || [],
+      gitRepo: p.git_repo || undefined,
+      gitBranch: p.git_branch || 'main',
+      status: p.status || 'ready',
+      createdAt: p.created_at || new Date().toISOString(),
+      updatedAt: p.updated_at || new Date().toISOString(),
+    }));
   },
 
   /**
-   * Create a new hosting project under an organization.
+   * Create a new hosting project under an organization in `public.projects`
    */
   async createHostingProject(
     orgId: string,
@@ -644,6 +752,11 @@ export const supabaseData = {
     }
   ): Promise<HostingProject> {
     const sb = getSupabase();
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in createHostingProject.');
+      throw new Error('Supabase client is not available.');
+    }
+
     const cleanName = input.name.trim();
     const slug = cleanName
       .toLowerCase()
@@ -652,72 +765,52 @@ export const supabaseData = {
     const subdomain = `${slug}.optic.doy.best`;
     const productionDomain = `https://${subdomain}`;
 
-    let newProject: HostingProject | null = null;
+    console.log('[Supabase] Inserting project into public.projects:', {
+      organization_id: orgId,
+      name: cleanName,
+      slug,
+      framework: input.framework,
+    });
 
-    if (sb) {
-      try {
-        const { data, error } = await sb
-          .from('hosting_projects')
-          .insert({
-            organization_id: orgId,
-            name: cleanName,
-            slug,
-            framework: input.framework,
-            production_domain: productionDomain,
-            assigned_subdomain: subdomain,
-            custom_domains: [],
-            git_repo: input.gitRepo || null,
-            git_branch: input.gitBranch || 'main',
-            status: 'ready',
-          })
-          .select()
-          .single();
-
-        if (!error && data) {
-          newProject = {
-            id: data.id,
-            organization_id: data.organization_id || orgId,
-            name: data.name,
-            slug: data.slug,
-            framework: data.framework,
-            productionDomain: data.production_domain || productionDomain,
-            assignedSubdomain: data.assigned_subdomain || subdomain,
-            customDomains: data.custom_domains || [],
-            gitRepo: data.git_repo || undefined,
-            gitBranch: data.git_branch || 'main',
-            status: data.status || 'ready',
-            createdAt: data.created_at,
-            updatedAt: data.updated_at,
-          };
-        }
-      } catch (err) {
-        console.warn('Supabase project creation fallback:', err);
-      }
-    }
-
-    if (!newProject) {
-      const generatedId = typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `proj_${Math.random().toString(36).substring(2, 10)}`;
-
-      newProject = {
-        id: generatedId,
+    const { data, error } = await sb
+      .from('projects')
+      .insert({
         organization_id: orgId,
         name: cleanName,
         slug,
         framework: input.framework,
-        productionDomain,
-        assignedSubdomain: subdomain,
-        customDomains: [],
-        gitRepo: input.gitRepo,
-        gitBranch: input.gitBranch || 'main',
+        production_domain: productionDomain,
+        assigned_subdomain: subdomain,
+        custom_domains: [],
+        git_repo: input.gitRepo || null,
+        git_branch: input.gitBranch || 'main',
         status: 'ready',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[Supabase] Error inserting project into public.projects:', error);
+      throw error;
     }
 
-    // Also automatically create the initial deployment record
+    const newProject: HostingProject = {
+      id: data.id,
+      organization_id: data.organization_id || orgId,
+      name: data.name,
+      slug: data.slug,
+      framework: data.framework,
+      productionDomain: data.production_domain || productionDomain,
+      assignedSubdomain: data.assigned_subdomain || subdomain,
+      customDomains: data.custom_domains || [],
+      gitRepo: data.git_repo || undefined,
+      gitBranch: data.git_branch || 'main',
+      status: data.status || 'ready',
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+    };
+
+    // Create initial deployment record in `public.deployments`
     try {
       await this.createDeployment(newProject.id, orgId, {
         projectName: newProject.name,
@@ -727,94 +820,70 @@ export const supabaseData = {
         environment: 'production',
         url: newProject.productionDomain,
       });
-    } catch {
-      // ignore
-    }
-
-    // Sync to local org cache
-    try {
-      const key = `optic_projects_${orgId}`;
-      const existing = JSON.parse(localStorage.getItem(key) || '[]');
-      existing.unshift(newProject);
-      localStorage.setItem(key, JSON.stringify(existing));
-    } catch {
-      // ignore
+    } catch (depErr) {
+      console.warn('[Supabase] Initial deployment creation notice:', depErr);
     }
 
     return newProject;
   },
 
   /**
-   * Delete hosting project
+   * Delete hosting project from `public.projects`
    */
   async deleteHostingProject(projectId: string, orgId: string): Promise<void> {
     const sb = getSupabase();
-    if (sb) {
-      try {
-        await sb.from('hosting_projects').delete().eq('id', projectId);
-      } catch (err) {
-        console.warn('Error deleting project in Supabase:', err);
-      }
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in deleteHostingProject.');
+      throw new Error('Supabase client is not available.');
     }
-    try {
-      const key = `optic_projects_${orgId}`;
-      const existing: HostingProject[] = JSON.parse(localStorage.getItem(key) || '[]');
-      const filtered = existing.filter((p) => p.id !== projectId);
-      localStorage.setItem(key, JSON.stringify(filtered));
-    } catch {
-      // ignore
+
+    console.log('[Supabase] Deleting project from public.projects:', { projectId, orgId });
+
+    const { error } = await sb.from('projects').delete().eq('id', projectId);
+    if (error) {
+      console.error('[Supabase] Error deleting project from public.projects:', error);
+      throw error;
     }
   },
 
   /**
-   * Get deployments for a project.
+   * Get deployments for a project from `public.deployments`
    */
   async getProjectDeployments(projectId: string, orgId?: string): Promise<DeploymentItem[]> {
     const sb = getSupabase();
-    if (sb && projectId) {
-      try {
-        const { data, error } = await sb
-          .from('hosting_deployments')
-          .select('*')
-          .eq('project_id', projectId)
-          .order('created_at', { ascending: false });
+    if (!sb || !projectId) return [];
 
-        if (!error && data) {
-          return data.map((d: any) => ({
-            id: d.id,
-            projectId: d.project_id,
-            projectName: d.project_name || 'project',
-            status: d.status || 'ready',
-            url: d.url,
-            commitHash: d.commit_hash || 'HEAD',
-            commitMessage: d.commit_message || 'Deployment update',
-            creator: d.creator || 'developer',
-            branch: d.branch || 'main',
-            durationSeconds: d.duration_seconds || 12,
-            environment: d.environment || 'production',
-            createdAt: d.created_at,
-          }));
-        }
-      } catch (err) {
-        console.warn('Deployments fetch notice:', err);
-      }
+    console.log('[Supabase] Querying public.deployments for project:', projectId);
+
+    const { data, error } = await sb
+      .from('deployments')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[Supabase] Error querying public.deployments:', error);
+      throw error;
     }
 
-    try {
-      const key = `optic_deployments_${projectId}`;
-      const stored = localStorage.getItem(key);
-      if (stored) {
-        return JSON.parse(stored);
-      }
-    } catch {
-      // ignore
-    }
-
-    return [];
+    return (data || []).map((d: any) => ({
+      id: d.id,
+      projectId: d.project_id,
+      projectName: d.project_name || 'project',
+      status: d.status || 'ready',
+      url: d.url,
+      commitHash: d.commit_hash || 'HEAD',
+      commitMessage: d.commit_message || 'Deployment update',
+      creator: d.creator || 'developer',
+      branch: d.branch || 'main',
+      durationSeconds: d.duration_seconds || 12,
+      environment: d.environment || 'production',
+      createdAt: d.created_at,
+    }));
   },
 
   /**
-   * Create a new deployment for a project.
+   * Create a new deployment for a project in `public.deployments`
    */
   async createDeployment(
     projectId: string,
@@ -822,214 +891,154 @@ export const supabaseData = {
     input: Partial<DeploymentItem>
   ): Promise<DeploymentItem> {
     const sb = getSupabase();
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in createDeployment.');
+      throw new Error('Supabase client is not available.');
+    }
+
     const commitHash = input.commitHash || Math.random().toString(16).substring(2, 9);
     const duration = input.durationSeconds || Math.floor(8 + Math.random() * 8);
 
-    let newDep: DeploymentItem | null = null;
+    console.log('[Supabase] Inserting deployment into public.deployments:', {
+      project_id: projectId,
+      organization_id: orgId,
+    });
 
-    if (sb) {
-      try {
-        const { data, error } = await sb
-          .from('hosting_deployments')
-          .insert({
-            project_id: projectId,
-            organization_id: orgId,
-            status: input.status || 'ready',
-            url: input.url || `https://app.optic.doy.best`,
-            commit_hash: commitHash,
-            commit_message: input.commitMessage || 'Manual deployment',
-            creator: input.creator || 'developer',
-            branch: input.branch || 'main',
-            duration_seconds: duration,
-            environment: input.environment || 'production',
-          })
-          .select()
-          .single();
-
-        if (!error && data) {
-          newDep = {
-            id: data.id,
-            projectId: data.project_id,
-            projectName: input.projectName || 'project',
-            status: data.status,
-            url: data.url,
-            commitHash: data.commit_hash,
-            commitMessage: data.commit_message,
-            creator: data.creator,
-            branch: data.branch,
-            durationSeconds: data.duration_seconds,
-            environment: data.environment,
-            createdAt: data.created_at,
-          };
-        }
-      } catch (err) {
-        console.warn('Deployment insert notice:', err);
-      }
-    }
-
-    if (!newDep) {
-      newDep = {
-        id: typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `dep_${Math.random().toString(36).substring(2, 10)}`,
-        projectId,
-        projectName: input.projectName || 'project',
+    const { data, error } = await sb
+      .from('deployments')
+      .insert({
+        project_id: projectId,
+        organization_id: orgId,
         status: input.status || 'ready',
         url: input.url || 'https://app.optic.doy.best',
-        commitHash,
-        commitMessage: input.commitMessage || 'Manual deployment',
+        commit_hash: commitHash,
+        commit_message: input.commitMessage || 'Manual deployment',
         creator: input.creator || 'developer',
         branch: input.branch || 'main',
-        durationSeconds: duration,
+        duration_seconds: duration,
         environment: input.environment || 'production',
-        createdAt: new Date().toISOString(),
-      };
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[Supabase] Error inserting deployment into public.deployments:', error);
+      throw error;
     }
 
-    try {
-      const key = `optic_deployments_${projectId}`;
-      const existing = JSON.parse(localStorage.getItem(key) || '[]');
-      existing.unshift(newDep);
-      localStorage.setItem(key, JSON.stringify(existing));
-    } catch {
-      // ignore
-    }
-
-    return newDep;
+    return {
+      id: data.id,
+      projectId: data.project_id,
+      projectName: input.projectName || 'project',
+      status: data.status,
+      url: data.url,
+      commitHash: data.commit_hash,
+      commitMessage: data.commit_message,
+      creator: data.creator,
+      branch: data.branch,
+      durationSeconds: data.duration_seconds,
+      environment: data.environment,
+      createdAt: data.created_at,
+    };
   },
 
   /**
-   * Get domains for a project
+   * Get domains for a project from `public.domains`
    */
   async getProjectDomains(projectId: string): Promise<DomainItem[]> {
     const sb = getSupabase();
-    if (sb && projectId) {
-      try {
-        const { data, error } = await sb
-          .from('hosting_domains')
-          .select('*')
-          .eq('project_id', projectId)
-          .order('created_at', { ascending: false });
+    if (!sb || !projectId) return [];
 
-        if (!error && data) {
-          return data.map((d: any) => ({
-            id: d.id,
-            projectId: d.project_id,
-            domain: d.domain,
-            status: d.status || 'verified',
-            dnsType: d.dns_type || 'CNAME',
-            dnsTarget: d.dns_target || 'cname.optic.doy.best',
-            sslStatus: d.ssl_status || 'active',
-            createdAt: d.created_at,
-          }));
-        }
-      } catch (err) {
-        console.warn('Domains fetch notice:', err);
-      }
+    console.log('[Supabase] Querying public.domains for project:', projectId);
+
+    const { data, error } = await sb
+      .from('domains')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[Supabase] Error querying public.domains:', error);
+      throw error;
     }
 
-    try {
-      const key = `optic_domains_${projectId}`;
-      const stored = localStorage.getItem(key);
-      if (stored) {
-        return JSON.parse(stored);
-      }
-    } catch {
-      // ignore
-    }
-
-    return [];
+    return (data || []).map((d: any) => ({
+      id: d.id,
+      projectId: d.project_id,
+      domain: d.domain,
+      status: d.status || 'verified',
+      dnsType: d.dns_type || 'CNAME',
+      dnsTarget: d.dns_target || 'cname.optic.doy.best',
+      sslStatus: d.ssl_status || 'active',
+      createdAt: d.created_at,
+    }));
   },
 
   /**
-   * Add a custom domain for a project
+   * Add a custom domain for a project in `public.domains`
    */
   async addProjectDomain(projectId: string, orgId: string, domain: string): Promise<DomainItem> {
-    const cleanDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
     const sb = getSupabase();
-
-    let newDomain: DomainItem | null = null;
-
-    if (sb) {
-      try {
-        const { data, error } = await sb
-          .from('hosting_domains')
-          .insert({
-            project_id: projectId,
-            organization_id: orgId,
-            domain: cleanDomain,
-            status: 'verified',
-            dns_type: 'CNAME',
-            dns_target: 'cname.optic.doy.best',
-            ssl_status: 'active',
-          })
-          .select()
-          .single();
-
-        if (!error && data) {
-          newDomain = {
-            id: data.id,
-            projectId: data.project_id,
-            domain: data.domain,
-            status: data.status,
-            dnsType: data.dns_type,
-            dnsTarget: data.dns_target,
-            sslStatus: data.ssl_status,
-            createdAt: data.created_at,
-          };
-        }
-      } catch (err) {
-        console.warn('Add domain notice:', err);
-      }
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in addProjectDomain.');
+      throw new Error('Supabase client is not available.');
     }
 
-    if (!newDomain) {
-      newDomain = {
-        id: typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `dom_${Math.random().toString(36).substring(2, 10)}`,
-        projectId,
+    const cleanDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    console.log('[Supabase] Inserting domain into public.domains:', {
+      project_id: projectId,
+      organization_id: orgId,
+      domain: cleanDomain,
+    });
+
+    const { data, error } = await sb
+      .from('domains')
+      .insert({
+        project_id: projectId,
+        organization_id: orgId,
         domain: cleanDomain,
         status: 'verified',
-        dnsType: 'CNAME',
-        dnsTarget: 'cname.optic.doy.best',
-        sslStatus: 'active',
-        createdAt: new Date().toISOString(),
-      };
+        dns_type: 'CNAME',
+        dns_target: 'cname.optic.doy.best',
+        ssl_status: 'active',
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[Supabase] Error inserting domain into public.domains:', error);
+      throw error;
     }
 
-    try {
-      const key = `optic_domains_${projectId}`;
-      const existing = JSON.parse(localStorage.getItem(key) || '[]');
-      existing.unshift(newDomain);
-      localStorage.setItem(key, JSON.stringify(existing));
-    } catch {
-      // ignore
-    }
-
-    return newDomain;
+    return {
+      id: data.id,
+      projectId: data.project_id,
+      domain: data.domain,
+      status: data.status,
+      dnsType: data.dns_type,
+      dnsTarget: data.dns_target,
+      sslStatus: data.ssl_status,
+      createdAt: data.created_at,
+    };
   },
 
   /**
-   * Delete domain
+   * Delete domain from `public.domains`
    */
   async deleteProjectDomain(domainId: string, projectId: string): Promise<void> {
     const sb = getSupabase();
-    if (sb) {
-      try {
-        await sb.from('hosting_domains').delete().eq('id', domainId);
-      } catch (err) {
-        console.warn('Delete domain notice:', err);
-      }
+    if (!sb) {
+      console.error('[Supabase] Supabase client is not available in deleteProjectDomain.');
+      throw new Error('Supabase client is not available.');
     }
-    try {
-      const key = `optic_domains_${projectId}`;
-      const existing: DomainItem[] = JSON.parse(localStorage.getItem(key) || '[]');
-      const filtered = existing.filter((d) => d.id !== domainId);
-      localStorage.setItem(key, JSON.stringify(filtered));
-    } catch {
-      // ignore
+
+    console.log('[Supabase] Deleting domain from public.domains:', { domainId, projectId });
+
+    const { error } = await sb.from('domains').delete().eq('id', domainId);
+    if (error) {
+      console.error('[Supabase] Error deleting domain from public.domains:', error);
+      throw error;
     }
   },
 };
-

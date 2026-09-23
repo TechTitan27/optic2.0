@@ -19,9 +19,8 @@ interface StoredApiKey {
   lastUsedAt: string | null;
 }
 
-// In-memory persistent state during server lifetime as reliable fallback
+// In-memory waitlist state during server lifetime
 const waitlist: WaitlistEntry[] = [];
-const inMemoryApiKeys: StoredApiKey[] = [];
 
 function parseJsonBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -138,68 +137,49 @@ export async function handleApiRequest(
       const id = 'key_' + crypto.randomBytes(8).toString('hex');
       const createdAt = new Date().toISOString();
 
-      // Try inserting into Supabase api_keys table
+      // Insert into Supabase api_keys table
       const sb = getSupabaseServerClient(token);
-      let insertedToSupabase = false;
-
-      if (sb) {
-        try {
-          const { data, error } = await sb
-            .from('api_keys')
-            .insert({
-              user_id: userId,
-              name,
-              key_prefix: keyPrefix,
-              key_hash: keyHash,
-              status: 'active',
-            })
-            .select()
-            .single();
-
-          if (!error && data) {
-            insertedToSupabase = true;
-            return sendJson(res, 201, {
-              success: true,
-              key: {
-                id: data.id,
-                name: data.name,
-                rawKey, // returned ONLY once
-                keyPrefix: data.key_prefix,
-                createdAt: data.created_at,
-              },
-            });
-          }
-        } catch (dbErr) {
-          console.warn('Supabase api_keys insert fallback:', dbErr);
-        }
+      if (!sb) {
+        console.error('[API /api/keys/create] Supabase server client unavailable.');
+        return sendJson(res, 500, {
+          success: false,
+          error: 'Supabase server client is not available. Please verify your Supabase configuration.',
+        });
       }
 
-      if (!insertedToSupabase) {
-        // Safe in-memory fallback
-        inMemoryApiKeys.unshift({
-          id,
-          userId,
+      const { data, error } = await sb
+        .from('api_keys')
+        .insert({
+          user_id: userId,
           name,
-          keyPrefix,
-          keyHash,
+          key_prefix: keyPrefix,
+          key_hash: keyHash,
           status: 'active',
-          createdAt,
-          lastUsedAt: null,
-        });
+        })
+        .select()
+        .single();
 
-        return sendJson(res, 201, {
-          success: true,
-          key: {
-            id,
-            name,
-            rawKey, // returned ONLY once
-            keyPrefix,
-            createdAt,
-          },
+      if (error) {
+        console.error('[API /api/keys/create] Supabase error inserting api_key:', error);
+        return sendJson(res, 500, {
+          success: false,
+          error: error.message || 'Database error creating API key',
         });
       }
-    } catch {
-      return sendJson(res, 500, { success: false, error: 'Failed to create key' });
+
+      return sendJson(res, 201, {
+        success: true,
+        key: {
+          id: data.id,
+          name: data.name,
+          rawKey, // returned ONLY once
+          keyPrefix: data.key_prefix,
+          createdAt: data.created_at,
+        },
+      });
+    } catch (err: any) {
+      console.error('[API /api/keys/create] Uncaught exception:', err);
+      return sendJson(res, 500, { success: false, error: err?.message || 'Failed to create key' });
     }
   }
 
@@ -209,50 +189,42 @@ export async function handleApiRequest(
       const { userId, token } = await resolveUserId(req);
       const sb = getSupabaseServerClient(token);
 
-      if (sb) {
-        try {
-          // Select only non-sensitive columns: id, name, key_prefix, status, created_at, last_used_at
-          // NEVER select or return key_hash
-          const { data, error } = await sb
-            .from('api_keys')
-            .select('id, name, key_prefix, status, created_at, last_used_at')
-            .eq('user_id', userId)
-            .order('created_at', { ascending: false });
-
-          if (!error && data) {
-            const keys = data.map((k: any) => ({
-              id: k.id,
-              name: k.name,
-              keyPrefix: k.key_prefix,
-              status: k.status,
-              createdAt: k.created_at,
-              lastUsedAt: k.last_used_at,
-            }));
-            return sendJson(res, 200, { success: true, keys });
-          }
-        } catch (dbErr) {
-          console.warn('Supabase api_keys list query fallback:', dbErr);
-        }
+      if (!sb) {
+        console.error('[API /api/keys/list] Supabase server client unavailable.');
+        return sendJson(res, 500, {
+          success: false,
+          error: 'Supabase server client is not available.',
+        });
       }
 
-      // In-memory fallback filtered strictly by userId
-      const userKeys = inMemoryApiKeys
-        .filter((k) => k.userId === userId)
-        .map((k) => ({
-          id: k.id,
-          name: k.name,
-          keyPrefix: k.keyPrefix,
-          status: k.status,
-          createdAt: k.createdAt,
-          lastUsedAt: k.lastUsedAt,
-        }));
+      // Select only non-sensitive columns: id, name, key_prefix, status, created_at, last_used_at
+      // NEVER select or return key_hash
+      const { data, error } = await sb
+        .from('api_keys')
+        .select('id, name, key_prefix, status, created_at, last_used_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
 
-      return sendJson(res, 200, {
-        success: true,
-        keys: userKeys,
-      });
-    } catch {
-      return sendJson(res, 500, { success: false, error: 'Failed to list keys' });
+      if (error) {
+        console.error('[API /api/keys/list] Supabase error listing api_keys:', error);
+        return sendJson(res, 500, {
+          success: false,
+          error: error.message || 'Database error fetching API keys',
+        });
+      }
+
+      const keys = (data || []).map((k: any) => ({
+        id: k.id,
+        name: k.name,
+        keyPrefix: k.key_prefix,
+        status: k.status,
+        createdAt: k.created_at,
+        lastUsedAt: k.last_used_at,
+      }));
+      return sendJson(res, 200, { success: true, keys });
+    } catch (err: any) {
+      console.error('[API /api/keys/list] Uncaught exception:', err);
+      return sendJson(res, 500, { success: false, error: err?.message || 'Failed to list keys' });
     }
   }
 
@@ -268,30 +240,26 @@ export async function handleApiRequest(
       }
 
       const sb = getSupabaseServerClient(token);
-      if (sb) {
-        try {
-          const { error } = await sb
-            .from('api_keys')
-            .update({ status: 'revoked' })
-            .eq('id', id)
-            .eq('user_id', userId);
-
-          if (!error) {
-            return sendJson(res, 200, { success: true, message: 'Key revoked' });
-          }
-        } catch (dbErr) {
-          console.warn('Supabase api_keys revoke fallback:', dbErr);
-        }
+      if (!sb) {
+        console.error('[API /api/keys/revoke] Supabase server client unavailable.');
+        return sendJson(res, 500, { success: false, error: 'Supabase server client unavailable.' });
       }
 
-      const target = inMemoryApiKeys.find((k) => k.id === id && k.userId === userId);
-      if (target) {
-        target.status = 'revoked';
+      const { error } = await sb
+        .from('api_keys')
+        .update({ status: 'revoked' })
+        .eq('id', id)
+        .eq('user_id', userId);
+
+      if (error) {
+        console.error('[API /api/keys/revoke] Supabase error revoking api_key:', error);
+        return sendJson(res, 500, { success: false, error: error.message });
       }
 
       return sendJson(res, 200, { success: true, message: 'Key revoked' });
-    } catch {
-      return sendJson(res, 500, { success: false, error: 'Failed to revoke key' });
+    } catch (err: any) {
+      console.error('[API /api/keys/revoke] Uncaught exception:', err);
+      return sendJson(res, 500, { success: false, error: err?.message || 'Failed to revoke key' });
     }
   }
 
@@ -307,30 +275,26 @@ export async function handleApiRequest(
       }
 
       const sb = getSupabaseServerClient(token);
-      if (sb) {
-        try {
-          const { error } = await sb
-            .from('api_keys')
-            .delete()
-            .eq('id', id)
-            .eq('user_id', userId);
-
-          if (!error) {
-            return sendJson(res, 200, { success: true, message: 'Key deleted' });
-          }
-        } catch (dbErr) {
-          console.warn('Supabase api_keys delete fallback:', dbErr);
-        }
+      if (!sb) {
+        console.error('[API /api/keys/delete] Supabase server client unavailable.');
+        return sendJson(res, 500, { success: false, error: 'Supabase server client unavailable.' });
       }
 
-      const index = inMemoryApiKeys.findIndex((k) => k.id === id && k.userId === userId);
-      if (index !== -1) {
-        inMemoryApiKeys.splice(index, 1);
+      const { error } = await sb
+        .from('api_keys')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', userId);
+
+      if (error) {
+        console.error('[API /api/keys/delete] Supabase error deleting api_key:', error);
+        return sendJson(res, 500, { success: false, error: error.message });
       }
 
       return sendJson(res, 200, { success: true, message: 'Key deleted' });
-    } catch {
-      return sendJson(res, 500, { success: false, error: 'Failed to delete key' });
+    } catch (err: any) {
+      console.error('[API /api/keys/delete] Uncaught exception:', err);
+      return sendJson(res, 500, { success: false, error: err?.message || 'Failed to delete key' });
     }
   }
 
@@ -351,7 +315,12 @@ export async function handleApiRequest(
             fileQuery = fileQuery.is('folder_id', null);
           }
 
-          let folderQuery = sb.from('folders').select('*').eq('user_id', userId);
+          let folderQuery = sb
+            .from('folders')
+            .select('id, user_id, parent_id, name, created_at')
+            .eq('user_id', userId)
+            .order('name', { ascending: true });
+
           if (folderId) {
             folderQuery = folderQuery.eq('parent_id', folderId);
           } else {
@@ -359,6 +328,13 @@ export async function handleApiRequest(
           }
 
           const [filesRes, foldersRes] = await Promise.all([fileQuery, folderQuery]);
+
+          if (filesRes.error) {
+            console.error('[API /api/cloud/files] Error querying files:', filesRes.error);
+          }
+          if (foldersRes.error) {
+            console.error('[API /api/cloud/files] Error querying folders:', foldersRes.error);
+          }
 
           if (!filesRes.error && !foldersRes.error && (filesRes.data || foldersRes.data)) {
             const mappedFiles = (filesRes.data || []).map((f: any) => ({
@@ -380,7 +356,6 @@ export async function handleApiRequest(
               id: fd.id,
               name: fd.name,
               parentId: fd.parent_id || fd.parentId || null,
-              path: fd.path || `/${fd.name}`,
               itemCount: 0,
               createdAt: fd.created_at || fd.createdAt || new Date().toISOString(),
             }));
@@ -392,7 +367,7 @@ export async function handleApiRequest(
             });
           }
         } catch (dbErr) {
-          console.warn('Supabase cloud files query fallback:', dbErr);
+          console.error('[API /api/cloud/files] Supabase cloud files exception:', dbErr);
         }
       }
 
@@ -401,7 +376,8 @@ export async function handleApiRequest(
         files: [],
         folders: [],
       });
-    } catch {
+    } catch (err: any) {
+      console.error('[API /api/cloud/files] Uncaught exception:', err);
       return sendJson(res, 500, { success: false, error: 'Failed to fetch cloud files' });
     }
   }
@@ -417,7 +393,7 @@ export async function handleApiRequest(
 
       if (sb) {
         try {
-          let query = sb.from('hosting_deployments').select('*').order('created_at', { ascending: false });
+          let query = sb.from('deployments').select('*').order('created_at', { ascending: false });
           if (projectId) {
             query = query.eq('project_id', projectId);
           }
@@ -426,7 +402,9 @@ export async function handleApiRequest(
           }
 
           const { data, error } = await query;
-          if (!error && data) {
+          if (error) {
+            console.error('[API /api/hosting/deployments] Supabase query error:', error);
+          } else if (data) {
             const mapped = data.map((d: any) => ({
               id: d.id,
               projectId: d.project_id,
@@ -444,7 +422,7 @@ export async function handleApiRequest(
             return sendJson(res, 200, { success: true, deployments: mapped });
           }
         } catch (dbErr) {
-          console.warn('Supabase hosting deployments query notice:', dbErr);
+          console.error('[API /api/hosting/deployments] Supabase exception:', dbErr);
         }
       }
 
@@ -452,7 +430,8 @@ export async function handleApiRequest(
         success: true,
         deployments: [],
       });
-    } catch {
+    } catch (err: any) {
+      console.error('[API /api/hosting/deployments] Uncaught exception:', err);
       return sendJson(res, 500, { success: false, error: 'Failed to fetch deployments' });
     }
   }
@@ -468,21 +447,24 @@ export async function handleApiRequest(
       if (sb && orgId) {
         try {
           const { data, error } = await sb
-            .from('hosting_projects')
+            .from('projects')
             .select('*')
             .eq('organization_id', orgId)
             .order('created_at', { ascending: false });
 
-          if (!error && data) {
+          if (error) {
+            console.error('[API /api/hosting/projects] Supabase query error:', error);
+          } else if (data) {
             return sendJson(res, 200, { success: true, projects: data });
           }
         } catch (dbErr) {
-          console.warn('Supabase projects query notice:', dbErr);
+          console.error('[API /api/hosting/projects] Supabase exception:', dbErr);
         }
       }
 
       return sendJson(res, 200, { success: true, projects: [] });
-    } catch {
+    } catch (err: any) {
+      console.error('[API /api/hosting/projects] Uncaught exception:', err);
       return sendJson(res, 500, { success: false, error: 'Failed to fetch projects' });
     }
   }
@@ -500,16 +482,19 @@ export async function handleApiRequest(
             .select('*, organization_members!inner(user_id, role)')
             .eq('organization_members.user_id', userId);
 
-          if (!error && data) {
+          if (error) {
+            console.error('[API /api/organizations] Supabase query error:', error);
+          } else if (data) {
             return sendJson(res, 200, { success: true, organizations: data });
           }
         } catch (dbErr) {
-          console.warn('Supabase organizations query notice:', dbErr);
+          console.error('[API /api/organizations] Supabase exception:', dbErr);
         }
       }
 
       return sendJson(res, 200, { success: true, organizations: [] });
-    } catch {
+    } catch (err: any) {
+      console.error('[API /api/organizations] Uncaught exception:', err);
       return sendJson(res, 500, { success: false, error: 'Failed to fetch organizations' });
     }
   }
