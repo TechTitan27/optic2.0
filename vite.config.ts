@@ -3,7 +3,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
-import { handleApiRequest } from './src/server/apiHandler';
+import { handleApiRequest } from './src/server/apiHandler.js';
 
 function opticApiPlugin(): Plugin {
   return {

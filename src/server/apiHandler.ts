@@ -1,13 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import crypto from 'crypto';
-import { getSupabaseServerClient, verifyUserToken } from './supabaseServer';
+import { getSupabaseServerClient, verifyUserToken } from './supabaseServer.js';
 import {
   getR2Config,
   createPresignedUploadUrl,
   createPresignedDownloadUrl,
   deleteStorageFile,
   cleanupOrphanedObject,
-} from './r2Storage';
+} from './r2Storage.js';
 
 interface WaitlistEntry {
   email: string;

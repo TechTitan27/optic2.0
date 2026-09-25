@@ -1,4 +1,4 @@
-import { getR2Config } from '../../src/server/r2Storage';
+import { getR2Config } from '../../src/server/r2Storage.js';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'GET') {

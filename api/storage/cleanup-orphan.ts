@@ -1,5 +1,5 @@
-import { verifyUserToken } from '../../src/server/supabaseServer';
-import { cleanupOrphanedObject } from '../../src/server/r2Storage';
+import { verifyUserToken } from '../../src/server/supabaseServer.js';
+import { cleanupOrphanedObject } from '../../src/server/r2Storage.js';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
