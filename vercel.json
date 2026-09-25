@@ -6,6 +6,10 @@
       "destination": "/api/keys/:action*"
     },
     {
+      "source": "/api/storage/:action*",
+      "destination": "/api/storage/:action*"
+    },
+    {
       "source": "/v1/keys/:action*",
       "destination": "/api/keys/:action*"
     },

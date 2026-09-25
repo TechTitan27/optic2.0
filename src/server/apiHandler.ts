@@ -1,6 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import crypto from 'crypto';
 import { getSupabaseServerClient, verifyUserToken } from './supabaseServer';
+import {
+  getR2Config,
+  createPresignedUploadUrl,
+  createPresignedDownloadUrl,
+  deleteStorageFile,
+  cleanupOrphanedObject,
+} from './r2Storage';
 
 interface WaitlistEntry {
   email: string;
@@ -496,6 +503,219 @@ export async function handleApiRequest(
     } catch (err: any) {
       console.error('[API /api/organizations] Uncaught exception:', err);
       return sendJson(res, 500, { success: false, error: 'Failed to fetch organizations' });
+    }
+  }
+
+  // 10. POST /api/storage/upload-url
+  if (url.startsWith('/api/storage/upload-url') && method === 'POST') {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+
+      if (!user) {
+        return sendJson(res, 401, {
+          success: false,
+          error: 'Unauthorized. Please sign in to upload files.',
+        });
+      }
+
+      const r2Config = getR2Config();
+      if (!r2Config.isConfigured) {
+        return sendJson(res, 503, {
+          success: false,
+          error:
+            'Storage is not configured. Server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.',
+        });
+      }
+
+      const body = await parseJsonBody(req);
+      const { name, mimeType, size, folderId } = body;
+      const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+
+      const result = await createPresignedUploadUrl({
+        userId: user.id,
+        name,
+        mimeType,
+        size: Number(size),
+        folderId: folderId || null,
+        userToken: token,
+      });
+
+      return sendJson(res, 200, {
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      console.error('[API /api/storage/upload-url] Error:', err);
+      const message = err?.message || 'Failed to generate upload URL.';
+      const status =
+        message.includes('permission') || message.includes('Unauthorized')
+          ? 403
+          : message.includes('not found')
+          ? 404
+          : message.includes('too large') || message.includes('type') || message.includes('cannot be empty')
+          ? 400
+          : message.includes('Storage is not configured')
+          ? 503
+          : 500;
+      return sendJson(res, status, { success: false, error: message });
+    }
+  }
+
+  // 11. GET /api/storage/download/:fileId or /api/storage/download?fileId=...
+  if (url.startsWith('/api/storage/download') && method === 'GET') {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+
+      if (!user) {
+        return sendJson(res, 401, {
+          success: false,
+          error: 'Unauthorized. Please sign in to download files.',
+        });
+      }
+
+      const r2Config = getR2Config();
+      if (!r2Config.isConfigured) {
+        return sendJson(res, 503, {
+          success: false,
+          error:
+            'Storage is not configured. Server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.',
+        });
+      }
+
+      const parsedUrl = new URL(url, 'http://localhost');
+      let fileId = parsedUrl.searchParams.get('fileId') || parsedUrl.searchParams.get('id');
+      if (!fileId && parsedUrl.pathname !== '/api/storage/download') {
+        const parts = parsedUrl.pathname.split('/');
+        fileId = parts[parts.length - 1];
+      }
+
+      if (!fileId) {
+        return sendJson(res, 400, { success: false, error: 'fileId parameter is required.' });
+      }
+
+      const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+
+      const result = await createPresignedDownloadUrl({
+        userId: user.id,
+        fileId,
+        userToken: token,
+      });
+
+      return sendJson(res, 200, {
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      console.error('[API /api/storage/download] Error:', err);
+      const message = err?.message || 'Failed to generate download URL.';
+      const status = message.includes('permission')
+        ? 403
+        : message.includes('not found')
+        ? 404
+        : message.includes('Storage is not configured')
+        ? 503
+        : 500;
+      return sendJson(res, status, { success: false, error: message });
+    }
+  }
+
+  // 12. DELETE /api/storage/files/:fileId or /api/storage/files?fileId=...
+  if (url.startsWith('/api/storage/files') && (method === 'DELETE' || method === 'POST')) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+
+      if (!user) {
+        return sendJson(res, 401, {
+          success: false,
+          error: 'Unauthorized. Please sign in to delete files.',
+        });
+      }
+
+      const parsedUrl = new URL(url, 'http://localhost');
+      let fileId = parsedUrl.searchParams.get('fileId') || parsedUrl.searchParams.get('id');
+      if (!fileId && parsedUrl.pathname !== '/api/storage/files') {
+        const parts = parsedUrl.pathname.split('/');
+        fileId = parts[parts.length - 1];
+      }
+
+      if (!fileId && method === 'POST') {
+        const body = await parseJsonBody(req);
+        fileId = body.fileId || body.id;
+      }
+
+      if (!fileId) {
+        return sendJson(res, 400, { success: false, error: 'fileId is required.' });
+      }
+
+      const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+
+      const result = await deleteStorageFile({
+        userId: user.id,
+        fileId,
+        userToken: token,
+      });
+
+      return sendJson(res, 200, {
+        message: 'File deleted successfully from R2 and database.',
+        ...result,
+      });
+    } catch (err: any) {
+      console.error('[API /api/storage/files] Error:', err);
+      const message = err?.message || 'Failed to delete file.';
+      const status = message.includes('permission')
+        ? 403
+        : message.includes('not found')
+        ? 404
+        : 500;
+      return sendJson(res, status, { success: false, error: message });
+    }
+  }
+
+  // 13. GET /api/storage/status
+  if (url.startsWith('/api/storage/status') && method === 'GET') {
+    const config = getR2Config();
+    return sendJson(res, 200, {
+      success: true,
+      isConfigured: config.isConfigured,
+      provider: 'Cloudflare R2',
+      bucketName: config.bucketName || null,
+      hasAccountId: Boolean(config.accountId),
+      hasAccessKey: Boolean(config.accessKeyId),
+      hasSecretKey: Boolean(config.secretAccessKey),
+      notice: config.isConfigured
+        ? 'Cloudflare R2 is configured and ready for presigned uploads.'
+        : 'Cloudflare R2 server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.',
+    });
+  }
+
+  // 14. POST /api/storage/cleanup-orphan
+  if (url.startsWith('/api/storage/cleanup-orphan') && method === 'POST') {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+
+      if (!user) {
+        return sendJson(res, 401, { success: false, error: 'Unauthorized.' });
+      }
+
+      const body = await parseJsonBody(req);
+      const { storageKey } = body;
+
+      if (!storageKey) {
+        return sendJson(res, 400, { success: false, error: 'storageKey is required.' });
+      }
+
+      const cleaned = await cleanupOrphanedObject({
+        userId: user.id,
+        storageKey,
+      });
+
+      return sendJson(res, 200, { success: true, cleaned });
+    } catch (err: any) {
+      return sendJson(res, 500, { success: false, error: err?.message || 'Failed to cleanup object.' });
     }
   }
 

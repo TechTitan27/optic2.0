@@ -136,6 +136,10 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
   // Modals
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState<number>(0);
+  const [currentUploadingName, setCurrentUploadingName] = useState<string>('');
+  const [uploadStatusText, setUploadStatusText] = useState<string>('');
+  const [storageStatus, setStorageStatus] = useState<{ isConfigured: boolean; notice: string; bucketName: string | null } | null>(null);
   const [newFolderModalOpen, setNewFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [renameFolderModalOpen, setRenameFolderModalOpen] = useState(false);
@@ -175,15 +179,19 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         return;
       }
 
-      const [dataRes, usageRes] = await Promise.all([
+      const [dataRes, usageRes, statusRes] = await Promise.all([
         supabaseData.getFilesAndFolders(userId, currentFolder?.id || null),
         supabaseData.getUserUsage(userId),
+        storageService.getStorageStatus(),
       ]);
 
       setFiles(dataRes.files);
       setFolders(dataRes.folders);
       if (usageRes) {
         setUsageStats(usageRes);
+      }
+      if (statusRes) {
+        setStorageStatus(statusRes);
       }
     } catch (err: any) {
       console.error('[CloudInterface] Failed to load cloud files from Supabase:', err);
@@ -197,11 +205,12 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
     loadData();
   }, [user, currentFolder]);
 
-  // Upload handler with real storage adapter & Supabase metadata
+  // Upload handler with real Cloudflare R2 presigned PUT & Supabase metadata
   const handleUploadFiles = async (selectedFiles: FileList | null) => {
     if (!selectedFiles || selectedFiles.length === 0) return;
     setUploadError(null);
     setUploading(true);
+    setUploadPercent(0);
 
     const userId = user?.id || '';
     if (!userId) {
@@ -211,43 +220,158 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
     }
 
     try {
-      for (const file of Array.from(selectedFiles)) {
-        const meta = storageService.detectMimeType(file.name);
-        // Call the isolated storage service
-        const uploadResult = await storageService.uploadFile(
-          file,
-          currentPathDisplay !== '/root' ? currentPathDisplay : undefined
-        );
+      const filesArray = Array.from(selectedFiles);
+      for (let i = 0; i < filesArray.length; i++) {
+        const file = filesArray[i];
+        setCurrentUploadingName(file.name);
+        setUploadPercent(0);
+        setUploadStatusText(`Authorizing with Optic API... (${i + 1}/${filesArray.length})`);
 
-        if (!uploadResult.success) {
-          // Explicitly refuse to fake successful uploads
-          setUploadError(uploadResult.error || 'Failed to upload object bytes to storage provider.');
-          setUploading(false);
-          return;
+        const meta = storageService.detectMimeType(file.name);
+        const mimeType = file.type || meta.type || 'application/octet-stream';
+
+        // 1. Request presigned PUT URL from Optic API
+        let uploadParams;
+        try {
+          uploadParams = await storageService.requestUploadUrl({
+            name: file.name,
+            mimeType,
+            size: file.size,
+            folderId: currentFolder?.id || null,
+          });
+        } catch (requestErr: any) {
+          throw new Error(requestErr?.message || 'Upload failed');
         }
 
-        // If upload succeeded, register file metadata in Supabase `files` table
-        await supabaseData.insertFileRecord(userId, {
-          name: file.name,
-          extension: meta.ext,
-          mimeType: meta.type,
-          sizeBytes: file.size,
-          folderId: currentFolder?.id || null,
-          storageKey: uploadResult.storageKey || `uploads/${file.name}`,
-          storageProvider: uploadResult.storageProvider || 'r2',
-          publicUrl: uploadResult.publicUrl || `https://cdn.optic.doy.best/uploads/${file.name}`,
-          isPublic: true,
-        });
+        const { uploadUrl, storageKey } = uploadParams;
+
+        // 2. Browser uploads DIRECTLY to Cloudflare R2
+        setUploadStatusText(`Uploading directly to Cloudflare R2...`);
+        try {
+          await storageService.uploadDirectToR2(
+            uploadUrl,
+            file,
+            mimeType,
+            (percent) => {
+              setUploadPercent(percent);
+            }
+          );
+        } catch (r2Err: any) {
+          // If R2 upload fails, do NOT create a successful file record
+          throw new Error(r2Err?.message || 'Upload failed: Cloudflare R2 direct transfer error.');
+        }
+
+        // 3. Only after R2 upload succeeds: INSERT into public.files
+        setUploadStatusText(`Registering file metadata in Supabase...`);
+        try {
+          await supabaseData.insertFileRecord(userId, {
+            name: file.name,
+            extension: meta.ext,
+            mimeType,
+            sizeBytes: file.size,
+            folderId: currentFolder?.id || null,
+            storageKey,
+            storageProvider: 'r2',
+            isPublic: false,
+          });
+        } catch (metaErr: any) {
+          // If metadata insertion fails after successful R2 upload, handle orphaned R2 object safely
+          setUploadStatusText('Cleaning up orphaned R2 storage object...');
+          await storageService.cleanupOrphanedObject(storageKey);
+          throw new Error(
+            `Database error recording file metadata: ${metaErr?.message || 'Failed to insert file'}. The uploaded R2 object was safely removed.`
+          );
+        }
       }
 
       setUploadModalOpen(false);
       await loadData();
-      toast.success('Files uploaded successfully to storage.', 'Upload Complete');
+      toast.success(
+        filesArray.length === 1
+          ? `File "${filesArray[0].name}" uploaded directly to Cloudflare R2.`
+          : `${filesArray.length} files uploaded directly to Cloudflare R2.`,
+        'Upload Complete'
+      );
     } catch (err: any) {
-      setUploadError(err?.message || 'Failed to upload file.');
-      toast.error(err?.message || 'Failed to upload file.', 'Upload Failed');
+      console.error('[CloudInterface] Upload error:', err);
+      const message = err?.message || 'Upload failed';
+      setUploadError(message);
+      toast.error(message, 'Upload Failed');
     } finally {
       setUploading(false);
+      setCurrentUploadingName('');
+      setUploadPercent(0);
+      setUploadStatusText('');
+    }
+  };
+
+  // Download file via short-lived presigned GET URL from server
+  const handleDownloadFile = async (file: FileItem) => {
+    try {
+      toast.info(`Preparing secure download for ${file.name}...`, 'Download');
+      const { downloadUrl } = await storageService.getDownloadUrl(file.id);
+
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = file.name;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success(`Download started for ${file.name}`, 'Download');
+    } catch (err: any) {
+      console.error('Download error:', err);
+      toast.error(err?.message || 'Could not download file.', 'Download Failed');
+    }
+  };
+
+  // Delete file from both Cloudflare R2 and Supabase
+  const handleDeleteFile = async (file: FileItem) => {
+    const userId = user?.id || '';
+    if (!userId) return;
+
+    try {
+      await storageService.deleteFile(file.id);
+      toast.success(`File "${file.name}" deleted from storage and database.`, 'File Deleted');
+      setSelectedFileForDetail(null);
+      await loadData();
+    } catch (err: any) {
+      console.error('Delete file error:', err);
+      try {
+        await supabaseData.deleteFile(userId, file.id, file.sizeBytes);
+        toast.success(`File "${file.name}" removed from database.`, 'File Removed');
+        setSelectedFileForDetail(null);
+        await loadData();
+      } catch (fallbackErr: any) {
+        toast.error(err?.message || fallbackErr?.message || 'Failed to delete file.', 'Delete Error');
+      }
+    }
+  };
+
+  // Generate temporary presigned download link for sharing
+  const handleOpenShareModal = async (file: FileItem) => {
+    setShareModalFile(file);
+    setCopiedLink(false);
+    setGeneratedShareUrl('Generating secure temporary download link...');
+    setShareExpiresAt('15 minutes');
+
+    try {
+      const { downloadUrl } = await storageService.getDownloadUrl(file.id);
+      setGeneratedShareUrl(downloadUrl);
+      setShareExpiresAt('15 minutes (Signed URL)');
+    } catch (err: any) {
+      console.warn('Presigned share link notice:', err);
+      const userId = user?.id || '';
+      if (userId) {
+        try {
+          const link = await supabaseData.createShareLink(userId, file.id, 72);
+          setGeneratedShareUrl(link.shareUrl);
+          setShareExpiresAt(new Date(link.expiresAt).toLocaleDateString());
+        } catch {
+          setGeneratedShareUrl('Unable to generate share link.');
+        }
+      }
     }
   };
 
@@ -325,39 +449,6 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
     } catch (err: any) {
       console.error('[CloudInterface] Failed to delete folder:', err);
       toast.error(err?.message || 'Failed to delete folder.', 'Delete Error');
-    }
-  };
-
-  // Delete file
-  const handleDeleteFile = async (file: FileItem) => {
-    const userId = user?.id || '';
-    if (!userId) return;
-
-    try {
-      await supabaseData.deleteFile(userId, file.id, file.sizeBytes);
-      toast.success(`File "${file.name}" deleted.`, 'File Deleted');
-      setSelectedFileForDetail(null);
-      await loadData();
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to delete file.', 'Delete Error');
-    }
-  };
-
-  // Generate real share link from `share_links` table
-  const handleOpenShareModal = async (file: FileItem) => {
-    setShareModalFile(file);
-    setCopiedLink(false);
-    setGeneratedShareUrl(file.publicUrl || null);
-
-    const userId = user?.id || '';
-    if (userId) {
-      try {
-        const link = await supabaseData.createShareLink(userId, file.id, 72);
-        setGeneratedShareUrl(link.shareUrl);
-        setShareExpiresAt(new Date(link.expiresAt).toLocaleDateString());
-      } catch (err) {
-        console.warn('Share link generation notice:', err);
-      }
     }
   };
 
@@ -734,15 +825,22 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
                         <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
                             <button
+                              onClick={() => handleDownloadFile(file)}
+                              className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-sky-300 transition-colors"
+                              title="Download file"
+                            >
+                              <Download size={14} />
+                            </button>
+                            <button
                               onClick={() => handleOpenShareModal(file)}
-                              className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200"
+                              className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
                               title="Share file"
                             >
                               <Share2 size={14} />
                             </button>
                             <button
                               onClick={() => handleDeleteFile(file)}
-                              className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-red-400"
+                              className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-red-400 transition-colors"
                               title="Delete file"
                             >
                               <Trash2 size={14} />
@@ -784,9 +882,30 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
             <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/80 text-red-300 text-xs font-mono leading-relaxed">
               <div className="flex items-center gap-1.5 font-semibold mb-1 text-red-200">
                 <AlertCircle size={14} />
-                <span>Storage Adapter Notice</span>
+                <span>Upload Error</span>
               </div>
               {uploadError}
+            </div>
+          )}
+
+          {uploading && (
+            <div className="p-4 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-zinc-200 font-medium truncate max-w-[260px]">
+                  {currentUploadingName || 'Uploading...'}
+                </span>
+                <span className="text-sky-400 font-mono font-semibold">{uploadPercent}%</span>
+              </div>
+              <div className="w-full bg-zinc-900 rounded-full h-2 overflow-hidden border border-zinc-800">
+                <div
+                  className="bg-sky-500 h-2 rounded-full transition-all duration-150"
+                  style={{ width: `${Math.max(uploadPercent, 4)}%` }}
+                />
+              </div>
+              <p className="text-[11px] text-zinc-400 font-mono flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
+                {uploadStatusText || 'Transferring directly to Cloudflare R2...'}
+              </p>
             </div>
           )}
 
@@ -941,18 +1060,28 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
               >
                 Delete File
               </Button>
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={() => {
-                  const file = selectedFileForDetail;
-                  setSelectedFileForDetail(null);
-                  handleOpenShareModal(file);
-                }}
-                icon={<Share2 size={13} />}
-              >
-                Share Link
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => handleDownloadFile(selectedFileForDetail)}
+                  icon={<Download size={13} />}
+                >
+                  Download
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => {
+                    const file = selectedFileForDetail;
+                    setSelectedFileForDetail(null);
+                    handleOpenShareModal(file);
+                  }}
+                  icon={<Share2 size={13} />}
+                >
+                  Share Link
+                </Button>
+              </div>
             </div>
           </div>
         </Modal>

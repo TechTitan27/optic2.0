@@ -15,74 +15,226 @@ export interface StorageUploadResult {
   error?: string;
 }
 
-/**
- * Storage adapter abstraction
- * Strictly isolated so Cloudflare R2 or Supabase Storage can be plugged in without refactoring UI.
- * Explicitly rejects faked successful byte uploads when storage credentials are not provided.
- */
-export class OpticStorageService {
-  private isR2Configured: boolean;
+export interface R2StatusResponse {
+  success: boolean;
+  isConfigured: boolean;
+  provider: string;
+  bucketName: string | null;
+  notice: string;
+}
 
-  constructor() {
-    this.isR2Configured = false;
+export class OpticStorageService {
+  /**
+   * Helper to retrieve active Supabase Auth JWT token
+   */
+  async getAuthToken(): Promise<string | null> {
+    const sb = getSupabase();
+    if (!sb) return null;
+    try {
+      const {
+        data: { session },
+      } = await sb.auth.getSession();
+      return session?.access_token || null;
+    } catch {
+      return null;
+    }
   }
 
-  getStorageStatus() {
+  /**
+   * Query server to check if Cloudflare R2 credentials are configured
+   */
+  async getStorageStatus(): Promise<R2StatusResponse> {
+    try {
+      const token = await this.getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/storage/status', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        return data;
+      }
+    } catch (err) {
+      console.warn('[OpticStorageService] Could not check storage status:', err);
+    }
+
     return {
-      provider: this.isR2Configured ? 'Cloudflare R2' : 'Optic Modular Adapter (Awaiting R2 credentials)',
-      isR2Configured: this.isR2Configured,
-      objectStorageReady: this.isR2Configured,
-      metadataEngine: 'Supabase PostgreSQL (files, folders, share_links, usage)',
+      success: false,
+      isConfigured: false,
+      provider: 'Cloudflare R2',
+      bucketName: null,
       notice:
-        'R2 credentials (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are configured server-side. File metadata is securely synced to Supabase.',
+        'Cloudflare R2 server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.',
     };
   }
 
   /**
-   * Uploads file bytes to real storage backend.
-   * If R2 is not yet configured, attempts Supabase Storage bucket 'optic-files'.
-   * If neither is configured, returns an explicit error rather than faking success.
+   * Request a short-lived presigned PUT URL from Optic API
    */
-  async uploadFile(file: File, folderPath?: string): Promise<StorageUploadResult> {
-    const sb = getSupabase();
-    if (sb) {
-      try {
-        const cleanPath = folderPath ? `${folderPath.replace(/^\//, '')}/${file.name}` : file.name;
-        const storageKey = `uploads/${Date.now()}_${cleanPath.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-
-        const { data, error } = await sb.storage.from('optic-files').upload(storageKey, file, {
-          cacheControl: '3600',
-          upsert: false,
-        });
-
-        if (!error && data) {
-          const {
-            data: { publicUrl },
-          } = sb.storage.from('optic-files').getPublicUrl(storageKey);
-          return {
-            success: true,
-            storageKey,
-            publicUrl:
-              publicUrl ||
-              `https://dsrvkqutqxuvmfhbcuvy.supabase.co/storage/v1/object/public/optic-files/${storageKey}`,
-            storageProvider: 'supabase_storage',
-          };
-        }
-      } catch (storageErr) {
-        console.warn('Supabase storage upload attempt:', storageErr);
-      }
+  async requestUploadUrl(params: {
+    name: string;
+    mimeType: string;
+    size: number;
+    folderId?: string | null;
+  }): Promise<{ uploadUrl: string; storageKey: string; expiresIn: number }> {
+    const token = await this.getAuthToken();
+    if (!token) {
+      throw new Error('You must be signed in to upload files.');
     }
 
-    // Do NOT fake successful uploads per prompt instructions
+    const res = await fetch('/api/storage/upload-url', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        name: params.name,
+        mimeType: params.mimeType,
+        size: params.size,
+        folderId: params.folderId || null,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Upload failed');
+    }
+
     return {
-      success: false,
-      error:
-        'Object storage backend is not yet connected. Cloudflare R2 credentials (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) or a Supabase Storage bucket ("optic-files") must be provisioned to store object binary data.',
+      uploadUrl: data.uploadUrl,
+      storageKey: data.storageKey,
+      expiresIn: data.expiresIn || 900,
     };
   }
 
+  /**
+   * Directly PUT file bytes to Cloudflare R2 with progress monitoring
+   */
+  async uploadDirectToR2(
+    uploadUrl: string,
+    file: File,
+    mimeType: string,
+    onProgress?: (percentage: number) => void
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', uploadUrl, true);
+      xhr.setRequestHeader('Content-Type', mimeType || file.type || 'application/octet-stream');
+
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && e.total > 0) {
+            const percent = Math.min(100, Math.round((e.loaded / e.total) * 100));
+            onProgress(percent);
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          if (onProgress) onProgress(100);
+          resolve();
+        } else {
+          reject(
+            new Error(
+              `Cloudflare R2 returned status ${xhr.status}: ${xhr.statusText || 'Direct upload rejected'}`
+            )
+          );
+        }
+      };
+
+      xhr.onerror = () => {
+        reject(
+          new Error(
+            'Direct R2 network upload error. Please ensure Cloudflare R2 bucket CORS allows PUT and Content-Type from this origin.'
+          )
+        );
+      };
+
+      xhr.ontimeout = () => {
+        reject(new Error('Upload to Cloudflare R2 timed out.'));
+      };
+
+      xhr.send(file);
+    });
+  }
+
+  /**
+   * Cleanup orphaned R2 object if metadata insert fails
+   */
+  async cleanupOrphanedObject(storageKey: string): Promise<void> {
+    try {
+      const token = await this.getAuthToken();
+      if (!token || !storageKey) return;
+
+      await fetch('/api/storage/cleanup-orphan', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ storageKey }),
+      });
+    } catch (err) {
+      console.warn('[OpticStorageService] Orphan cleanup notice:', err);
+    }
+  }
+
+  /**
+   * Request short-lived presigned GET URL for authenticated download
+   */
+  async getDownloadUrl(
+    fileId: string
+  ): Promise<{ downloadUrl: string; filename: string; mimeType: string }> {
+    const token = await this.getAuthToken();
+    if (!token) {
+      throw new Error('You must be signed in to download files.');
+    }
+
+    const res = await fetch(`/api/storage/download?fileId=${encodeURIComponent(fileId)}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Failed to generate download URL');
+    }
+
+    return {
+      downloadUrl: data.downloadUrl,
+      filename: data.filename || 'download',
+      mimeType: data.mimeType || 'application/octet-stream',
+    };
+  }
+
+  /**
+   * Delete file from R2 and database via API
+   */
+  async deleteFile(fileId: string): Promise<void> {
+    const token = await this.getAuthToken();
+    if (!token) {
+      throw new Error('You must be signed in to delete files.');
+    }
+
+    const res = await fetch(`/api/storage/files?fileId=${encodeURIComponent(fileId)}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Failed to delete file.');
+    }
+  }
+
   formatBytes(bytes: number, decimals = 1): string {
-    if (bytes === 0) return '0 B';
+    if (!bytes || bytes === 0) return '0 B';
     const k = 1024;
     const dm = decimals < 0 ? 0 : decimals;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -113,6 +265,9 @@ export class OpticStorageService {
       txt: 'text/plain',
       md: 'text/markdown',
       csv: 'text/csv',
+      mp4: 'video/mp4',
+      mp3: 'audio/mpeg',
+      wav: 'audio/wav',
     };
 
     return {

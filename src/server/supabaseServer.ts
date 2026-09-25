@@ -20,8 +20,7 @@ const SUPABASE_ANON_KEY =
 let serverClientInstance: SupabaseClient | null = null;
 
 export function getSupabaseServerClient(userToken?: string): SupabaseClient | null {
-  // If service role key is configured, prioritize service role for server operations
-  const keyToUse = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+  const keyToUse = SUPABASE_SERVICE_ROLE_KEY || userToken || SUPABASE_ANON_KEY;
   if (!keyToUse) return null;
 
   if (userToken && !SUPABASE_SERVICE_ROLE_KEY) {
@@ -34,6 +33,7 @@ export function getSupabaseServerClient(userToken?: string): SupabaseClient | nu
       global: {
         headers: {
           Authorization: `Bearer ${userToken}`,
+          apikey: keyToUse,
         },
       },
     });
@@ -56,12 +56,46 @@ export async function verifyUserToken(authHeader?: string): Promise<{ id: string
   if (!token) return null;
 
   try {
-    const sb = getSupabaseServerClient(token);
-    if (!sb) return null;
+    const keyToUse = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY || token;
+    const sb = createClient(SUPABASE_URL, keyToUse, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: keyToUse,
+        },
+      },
+    });
+
     const { data: { user }, error } = await sb.auth.getUser(token);
-    if (error || !user) return null;
-    return { id: user.id, email: user.email };
-  } catch {
-    return null;
+    if (!error && user?.id) {
+      return { id: user.id, email: user.email };
+    }
+  } catch (sbErr) {
+    // Fallback to direct REST endpoint
   }
+
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY || token,
+      },
+    });
+
+    if (resp.ok) {
+      const userData = (await resp.json()) as any;
+      if (userData?.id) {
+        return { id: userData.id, email: userData.email };
+      }
+    }
+  } catch (err) {
+    console.error('[verifyUserToken] Error verifying token:', err);
+  }
+
+  return null;
 }

@@ -24,7 +24,9 @@ export interface FileRecordInput {
 
 export const supabaseData = {
   /**
-   * Fetch usage statistics for the authenticated user from the real `public.usage` table
+   * Fetch usage statistics for the authenticated user.
+   * Total storage is calculated from SUM(files.size_bytes) for the authenticated user.
+   * Folders are not counted.
    */
   async getUserUsage(userId: string): Promise<UsageStats> {
     const defaultStats: UsageStats = {
@@ -42,31 +44,7 @@ export const supabaseData = {
     if (!sb || !userId) return defaultStats;
 
     try {
-      const { data, error } = await sb
-        .from('usage')
-        .select('*')
-        .eq('user_id', userId)
-        .maybeSingle();
-
-      if (error) {
-        console.error('[Supabase] Error querying public.usage table:', error);
-      }
-
-      if (data) {
-        return {
-          ...defaultStats,
-          storageUsedBytes: Number(data.storage_used_bytes || 0),
-          storageLimitBytes: Number(data.storage_limit_bytes || defaultStats.storageLimitBytes),
-          bandwidthUsedBytes: Number(data.bandwidth_used_bytes || 0),
-          bandwidthLimitBytes: Number(data.bandwidth_limit_bytes || defaultStats.bandwidthLimitBytes),
-          deploymentsThisMonth: Number(data.deployments_this_month || 1),
-          deploymentsLimit: Number(data.deployments_limit || defaultStats.deploymentsLimit),
-          apiRequestsThisMonth: Number(data.api_requests_this_month || 0),
-          apiRequestsLimit: Number(data.api_requests_limit || defaultStats.apiRequestsLimit),
-        };
-      }
-
-      // Compute total storage from existing files in public.files
+      // Calculate total storage from: SUM(files.size_bytes) for the authenticated user
       const { data: userFiles, error: filesErr } = await sb
         .from('files')
         .select('size_bytes')
@@ -81,7 +59,7 @@ export const supabaseData = {
         0
       );
 
-      // Attempt to initialize usage row
+      // Attempt to sync computed storage into usage table
       try {
         await sb.from('usage').upsert({
           user_id: userId,
@@ -95,7 +73,7 @@ export const supabaseData = {
           api_requests_limit: defaultStats.apiRequestsLimit,
         });
       } catch (upsertErr) {
-        console.warn('[Supabase] Usage row initialization warning:', upsertErr);
+        // Non-blocking sync warning
       }
 
       return {
@@ -403,22 +381,37 @@ export const supabaseData = {
       storage_provider: input.storageProvider,
     });
 
-    const { data, error } = await sb
+    const canonicalPayload: any = {
+      user_id: userId,
+      folder_id: input.folderId || null,
+      name: input.name,
+      storage_key: input.storageKey,
+      mime_type: input.mimeType,
+      size_bytes: input.sizeBytes,
+    };
+
+    let { data, error } = await sb
       .from('files')
       .insert({
-        user_id: userId,
-        name: input.name,
+        ...canonicalPayload,
         extension: input.extension,
-        mime_type: input.mimeType,
-        size_bytes: input.sizeBytes,
-        folder_id: input.folderId || null,
-        storage_key: input.storageKey,
         storage_provider: input.storageProvider,
         public_url: input.publicUrl,
-        is_public: input.isPublic ?? true,
+        is_public: input.isPublic ?? false,
       })
       .select()
       .single();
+
+    if (error && error.message && error.message.includes('column')) {
+      // Retry with strictly canonical public.files schema
+      const retry = await sb
+        .from('files')
+        .insert(canonicalPayload)
+        .select()
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.error('[Supabase] Error inserting file metadata into public.files:', error);
