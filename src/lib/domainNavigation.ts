@@ -126,6 +126,8 @@ export function getSurfaceUrl(surface: SurfaceType, path: string = '/'): string 
         return 'https://optic.doy.best/privacy';
       case 'terms':
         return 'https://optic.doy.best/terms';
+      case 'share':
+        return `https://cloud.optic.doy.best${path.startsWith('/') ? path : `/${path}`}`;
       default:
         return `https://optic.doy.best${path.startsWith('/') ? path : `/${path}`}`;
     }
@@ -133,6 +135,8 @@ export function getSurfaceUrl(surface: SurfaceType, path: string = '/'): string 
 
   // Local development / single-origin fallback
   switch (surface) {
+    case 'share':
+      return path.startsWith('/') ? path : `/${path}`;
     case 'cloud':
       return path.startsWith('/cloud') ? path : '/cloud';
     case 'hosting':
@@ -161,6 +165,30 @@ export function getSurfaceUrl(surface: SurfaceType, path: string = '/'): string 
 }
 
 /**
+ * Extracts a public share token from a URL path, e.g. /s/:token, /share/:token, or /cloud/s/:token
+ */
+export function getShareTokenFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/(?:cloud\/)?(?:s|share)\/([a-zA-Z0-9_-]+)/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Generates the canonical public share URL for a given token.
+ * Production: https://cloud.optic.doy.best/s/:token
+ * Development/Preview: [origin]/s/:token
+ */
+export function getShareLinkUrl(token: string): string {
+  if (typeof window === 'undefined') {
+    return `https://cloud.optic.doy.best/s/${token}`;
+  }
+  const currentHostname = window.location.hostname.toLowerCase().trim();
+  if (isProdOpticDomain(currentHostname)) {
+    return `https://cloud.optic.doy.best/s/${token}`;
+  }
+  return `${window.location.origin}/s/${token}`;
+}
+
+/**
  * Checks if navigating to targetSurface from the current hostname requires a cross-subdomain redirect.
  */
 export function isCrossSubdomainNavigation(targetSurface: SurfaceType): boolean {
@@ -171,6 +199,11 @@ export function isCrossSubdomainNavigation(targetSurface: SurfaceType): boolean 
   if (!isProd) return false;
 
   const currentProduct = getProductHost(currentHostname);
+
+  // Shared file links live on cloud.optic.doy.best
+  if (targetSurface === 'share') {
+    return currentProduct !== 'cloud';
+  }
 
   // If on Cloud product subdomain
   if (currentProduct === 'cloud') {
@@ -226,6 +259,16 @@ export function resolveSurfaceState(): {
   const hash = window.location.hash || '';
   const search = window.location.search || '';
   const productHost = getProductHost(hostname);
+
+  // Universal public file share route: /s/:token or /share/:token or /cloud/s/:token
+  const shareToken = getShareTokenFromPath(pathname);
+  if (shareToken) {
+    if (productHost === 'central') {
+      window.location.replace(`https://cloud.optic.doy.best/s/${shareToken}`);
+      return { surface: 'share', path: `/s/${shareToken}` };
+    }
+    return { surface: 'share', path: `/s/${shareToken}` };
+  }
 
   // Universal OAuth callback detection
   const isCallback =

@@ -149,6 +149,8 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
   const [shareModalFile, setShareModalFile] = useState<FileItem | null>(null);
   const [generatedShareUrl, setGeneratedShareUrl] = useState<string | null>(null);
   const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
+  const [shareExpirationOption, setShareExpirationOption] = useState<'none' | '24' | '168' | '720'>('none');
+  const [creatingShareLink, setCreatingShareLink] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
@@ -349,30 +351,48 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
     }
   };
 
-  // Generate temporary presigned download link for sharing
-  const handleOpenShareModal = async (file: FileItem) => {
-    setShareModalFile(file);
+  // Generate public file share link with optional expiration
+  const generateFileShareLink = async (file: FileItem, expOption: 'none' | '24' | '168' | '720') => {
+    const userId = user?.id || '';
+    if (!userId) {
+      toast.error('You must be signed in to create share links.');
+      return;
+    }
+
+    setCreatingShareLink(true);
     setCopiedLink(false);
-    setGeneratedShareUrl('Generating secure temporary download link...');
-    setShareExpiresAt('15 minutes');
+    setGeneratedShareUrl('Generating public share link...');
 
     try {
-      const { downloadUrl } = await storageService.getDownloadUrl(file.id);
-      setGeneratedShareUrl(downloadUrl);
-      setShareExpiresAt('15 minutes (Signed URL)');
-    } catch (err: any) {
-      console.warn('Presigned share link notice:', err);
-      const userId = user?.id || '';
-      if (userId) {
-        try {
-          const link = await supabaseData.createShareLink(userId, file.id, 72);
-          setGeneratedShareUrl(link.shareUrl);
-          setShareExpiresAt(new Date(link.expiresAt).toLocaleDateString());
-        } catch {
-          setGeneratedShareUrl('Unable to generate share link.');
-        }
+      const hours = expOption === 'none' ? null : parseInt(expOption, 10);
+      const link = await supabaseData.createShareLink(userId, file.id, hours);
+      setGeneratedShareUrl(link.shareUrl);
+      if (link.expiresAt) {
+        setShareExpiresAt(
+          new Date(link.expiresAt).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+          })
+        );
+      } else {
+        setShareExpiresAt('No expiration (permanent)');
       }
+    } catch (err: any) {
+      console.error('Share link generation error:', err);
+      toast.error(err?.message || 'Unable to create public share link.', 'Share Error');
+      setGeneratedShareUrl('Failed to generate share link.');
+    } finally {
+      setCreatingShareLink(false);
     }
+  };
+
+  const handleOpenShareModal = (file: FileItem) => {
+    setShareModalFile(file);
+    setShareExpirationOption('none');
+    generateFileShareLink(file, 'none');
   };
 
   // Create folder
@@ -1095,32 +1115,62 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
             setShareModalFile(null);
             setCopiedLink(false);
           }}
-          title="Share File Link"
-          description="Temporary authenticated link for secure file access"
+          title="Share File"
+          description={`Create a public link for ${shareModalFile.name}`}
         >
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <label className="text-xs text-zinc-400 font-medium">Public URL</label>
+              <label className="text-xs text-zinc-400 font-medium">Public Share URL</label>
               <div className="flex items-center gap-2 p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-xs text-zinc-200">
                 <span className="truncate flex-1 select-all">
-                  {generatedShareUrl || shareModalFile.publicUrl || 'Generating link...'}
+                  {creatingShareLink ? 'Generating link...' : generatedShareUrl || 'Generating link...'}
                 </span>
                 <button
                   onClick={async () => {
-                    const url = generatedShareUrl || shareModalFile.publicUrl;
-                    if (url) {
-                      await navigator.clipboard.writeText(url);
+                    if (
+                      generatedShareUrl &&
+                      !creatingShareLink &&
+                      !generatedShareUrl.startsWith('Generating') &&
+                      !generatedShareUrl.startsWith('Failed')
+                    ) {
+                      await navigator.clipboard.writeText(generatedShareUrl);
                       setCopiedLink(true);
-                      toast.success('CDN share link copied to clipboard.', 'Copied');
+                      toast.success('Public share link copied to clipboard.', 'Copied');
                       setTimeout(() => setCopiedLink(false), 2000);
                     }
                   }}
-                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 shrink-0"
+                  disabled={
+                    creatingShareLink ||
+                    !generatedShareUrl ||
+                    generatedShareUrl.startsWith('Generating') ||
+                    generatedShareUrl.startsWith('Failed')
+                  }
+                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 shrink-0 disabled:opacity-40"
                   title="Copy URL"
                 >
                   {copiedLink ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
                 </button>
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs text-zinc-400 font-medium">Link Expiration</label>
+              <select
+                value={shareExpirationOption}
+                onChange={(e) => {
+                  const val = e.target.value as 'none' | '24' | '168' | '720';
+                  setShareExpirationOption(val);
+                  if (shareModalFile) {
+                    generateFileShareLink(shareModalFile, val);
+                  }
+                }}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 cursor-pointer"
+              >
+                <option value="none">No expiration (Permanent)</option>
+                <option value="24">Expires in 24 hours (1 day)</option>
+                <option value="168">Expires in 7 days</option>
+                <option value="720">Expires in 30 days</option>
+              </select>
             </div>
 
             {shareExpiresAt && (
@@ -1130,19 +1180,34 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
             )}
 
             <div className="text-[11px] text-zinc-400 leading-relaxed bg-zinc-950 p-3 rounded-lg border border-zinc-800">
-              Anyone with this link can access the raw bytes via Optic edge nodes without authentication.
+              Anyone with this link can view and download the file. Visitors do not need an Optic account to access this public link.
             </div>
 
-            <Button
-              variant="primary"
-              className="w-full"
-              onClick={() => {
-                setShareModalFile(null);
-                setCopiedLink(false);
-              }}
-            >
-              Done
-            </Button>
+            <div className="flex gap-2">
+              {generatedShareUrl &&
+                !generatedShareUrl.startsWith('Generating') &&
+                !generatedShareUrl.startsWith('Failed') && (
+                  <a
+                    href={generatedShareUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-xs font-medium text-zinc-200 transition-colors"
+                  >
+                    <span>Open Share Page</span>
+                    <ExternalLink size={13} />
+                  </a>
+                )}
+              <Button
+                variant="primary"
+                className="flex-1"
+                onClick={() => {
+                  setShareModalFile(null);
+                  setCopiedLink(false);
+                }}
+              >
+                Done
+              </Button>
+            </div>
           </div>
         </Modal>
       )}

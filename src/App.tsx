@@ -23,6 +23,7 @@ import { AuthPage } from './components/auth/AuthPage';
 import { AuthGate } from './components/auth/AuthGate';
 import { PrivacyPage } from './components/legal/PrivacyPage';
 import { TermsPage } from './components/legal/TermsPage';
+import { PublicSharePage } from './components/share/PublicSharePage';
 import { NotFoundPage } from './components/common/NotFoundPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
@@ -33,9 +34,9 @@ function MainApp() {
   const initial = resolveSurfaceState();
   const domainInfo = getDomainInfo();
 
-  // Enforce host lock: cloud.optic.doy.best can ONLY render 'cloud' (or auth)
+  // Enforce host lock: cloud.optic.doy.best can ONLY render 'cloud' (or auth or share)
   const effectiveInitialSurface: SurfaceType = domainInfo.lockedSurface
-    ? ['login', 'signup', 'callback'].includes(initial.surface)
+    ? ['login', 'signup', 'callback', 'share'].includes(initial.surface)
       ? initial.surface
       : domainInfo.lockedSurface
     : initial.surface;
@@ -85,8 +86,10 @@ function MainApp() {
     // 2. Enforce hostname lock if on a dedicated product subdomain
     const currentInfo = getDomainInfo();
     if (currentInfo.lockedSurface) {
-      const isAuthFlow = ['login', 'signup', 'callback'].includes(surface);
-      if (surface !== currentInfo.lockedSurface && !isAuthFlow) {
+      const isAllowedSurface =
+        ['login', 'signup', 'callback', 'share'].includes(surface) ||
+        surface === currentInfo.lockedSurface;
+      if (!isAllowedSurface) {
         // Attempting to render a different product locally on a locked subdomain:
         // Must perform cross-subdomain navigation to the destination
         const destinationUrl = getSurfaceUrl(surface, path);
@@ -108,9 +111,18 @@ function MainApp() {
       let nextUrl = path;
       if (currentInfo.lockedSurface) {
         // Keep URL clean on dedicated subdomains (cloud.optic.doy.best / hosting.optic.doy.best)
-        nextUrl = path === '/login' || path === '/signup' || path === '/auth/callback' ? path : '/';
+        nextUrl =
+          path === '/login' ||
+          path === '/signup' ||
+          path === '/auth/callback' ||
+          path.startsWith('/s/') ||
+          path.startsWith('/share/')
+            ? path
+            : '/';
       } else {
-        if (surface === 'dashboard') {
+        if (surface === 'share') {
+          nextUrl = path.startsWith('/s/') ? path : `/s/${path}`;
+        } else if (surface === 'dashboard') {
           if (tab === 'keys') nextUrl = '/dashboard/keys';
           else if (tab === 'settings') nextUrl = '/dashboard/settings';
           else nextUrl = '/dashboard';
@@ -142,8 +154,10 @@ function MainApp() {
       const currentInfo = getDomainInfo();
 
       if (currentInfo.lockedSurface) {
-        const isAuthFlow = ['login', 'signup', 'callback'].includes(resolved.surface);
-        if (resolved.surface !== currentInfo.lockedSurface && !isAuthFlow) {
+        const isAllowedSurface =
+          ['login', 'signup', 'callback', 'share'].includes(resolved.surface) ||
+          resolved.surface === currentInfo.lockedSurface;
+        if (!isAllowedSurface) {
           // Force locked surface
           setCurrentSurface(currentInfo.lockedSurface);
           setCurrentPath('/');
@@ -313,6 +327,14 @@ function MainApp() {
 
         {currentSurface === 'terms' && (
           <TermsPage onNavigateSurface={handleNavigateSurface} />
+        )}
+
+        {/* Public Shared File View Page (No Login Required) */}
+        {currentSurface === 'share' && (
+          <PublicSharePage
+            path={currentPath}
+            onNavigate={handleNavigateSurface}
+          />
         )}
 
         {/* 404 Fallback Surface */}

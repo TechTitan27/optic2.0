@@ -1,5 +1,6 @@
 import { getSupabase } from './supabaseClient';
 import { getDiceBearOrgAvatarUrl } from './avatar';
+import { getShareLinkUrl } from './domainNavigation';
 import {
   FileItem,
   FolderItem,
@@ -7,6 +8,7 @@ import {
   Organization,
   HostingProject,
   DeploymentItem,
+  DeploymentLog,
   DomainItem,
 } from '../types';
 
@@ -517,13 +519,13 @@ export const supabaseData = {
   },
 
   /**
-   * Create share link in `public.share_links` table
+   * Create share link in `public.share_links` table with optional expiration
    */
   async createShareLink(
     userId: string,
     fileId: string,
-    expiresInHours = 48
-  ): Promise<{ shareUrl: string; token: string; expiresAt: string }> {
+    expiresInHours?: number | null
+  ): Promise<{ shareUrl: string; token: string; expiresAt: string | null }> {
     const sb = getSupabase();
     if (!sb) {
       console.error('[Supabase] Supabase client is not available in createShareLink.');
@@ -535,7 +537,10 @@ export const supabaseData = {
         ? crypto.randomUUID()
         : Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 
-    const expiresAt = new Date(Date.now() + expiresInHours * 3600000).toISOString();
+    const expiresAt =
+      expiresInHours && expiresInHours > 0
+        ? new Date(Date.now() + expiresInHours * 3600000).toISOString()
+        : null;
 
     console.log('[Supabase] Creating share link in public.share_links for file:', fileId);
 
@@ -555,18 +560,20 @@ export const supabaseData = {
       throw error;
     }
 
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://optic.doy.best';
+    const finalToken = data?.token || token;
+    const finalExpiresAt = data?.expires_at ?? expiresAt;
+
     return {
-      shareUrl: `${origin}/share/${data.token || token}`,
-      token: data.token || token,
-      expiresAt: data.expires_at || expiresAt,
+      shareUrl: getShareLinkUrl(finalToken),
+      token: finalToken,
+      expiresAt: finalExpiresAt,
     };
   },
 
   // ==========================================
   // ORGANIZATIONS & HOSTING DATA OPERATIONS
   // (Uses REAL Supabase tables: organizations,
-  // organization_members, projects, deployments, domains)
+  // organization_members, projects, deployments, deployment_logs, domains)
   // ==========================================
 
   /**
@@ -598,7 +605,7 @@ export const supabaseData = {
             slug: m.organizations.slug,
             created_by: m.organizations.created_by,
             created_at: m.organizations.created_at,
-            avatarUrl: m.organizations.avatar_url || getDiceBearOrgAvatarUrl(m.organizations.name),
+            avatarUrl: getDiceBearOrgAvatarUrl(m.organizations.id),
             role: m.role || 'member',
           }));
       }
@@ -620,7 +627,7 @@ export const supabaseData = {
         slug: o.slug,
         created_by: o.created_by,
         created_at: o.created_at,
-        avatarUrl: o.avatar_url || getDiceBearOrgAvatarUrl(o.name),
+        avatarUrl: getDiceBearOrgAvatarUrl(o.id),
         role: 'owner',
       }));
     } catch (err) {
@@ -645,7 +652,6 @@ export const supabaseData = {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '') || 'org';
     const slug = `${baseSlug}-${Math.random().toString(36).substring(2, 6)}`;
-    const orgAvatarUrl = getDiceBearOrgAvatarUrl(cleanName);
 
     console.log('[Supabase] Creating organization in public.organizations:', {
       name: cleanName,
@@ -659,7 +665,6 @@ export const supabaseData = {
         name: cleanName,
         slug,
         created_by: userId,
-        avatar_url: orgAvatarUrl,
       })
       .select()
       .single();
@@ -689,7 +694,7 @@ export const supabaseData = {
       slug: orgData.slug,
       created_by: orgData.created_by,
       created_at: orgData.created_at,
-      avatarUrl: orgData.avatar_url || orgAvatarUrl,
+      avatarUrl: getDiceBearOrgAvatarUrl(orgData.id),
       role: 'owner',
     };
   },
@@ -703,32 +708,76 @@ export const supabaseData = {
 
     console.log('[Supabase] Querying public.projects for organization:', orgId);
 
-    const { data, error } = await sb
+    const { data: projectsData, error: projErr } = await sb
       .from('projects')
       .select('*')
       .eq('organization_id', orgId)
       .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('[Supabase] Error querying public.projects:', error);
-      throw error;
+    if (projErr) {
+      console.error('[Supabase] Error querying public.projects:', projErr);
+      throw projErr;
     }
 
-    return (data || []).map((p: any) => ({
-      id: p.id,
-      organization_id: p.organization_id || orgId,
-      name: p.name,
-      slug: p.slug,
-      framework: p.framework || 'react',
-      productionDomain: p.production_domain || `https://${p.slug}.optic.doy.best`,
-      assignedSubdomain: p.assigned_subdomain || `${p.slug}.optic.doy.best`,
-      customDomains: p.custom_domains || [],
-      gitRepo: p.git_repo || undefined,
-      gitBranch: p.git_branch || 'main',
-      status: p.status || 'ready',
-      createdAt: p.created_at || new Date().toISOString(),
-      updatedAt: p.updated_at || new Date().toISOString(),
-    }));
+    // Also fetch latest deployment for each project to show live status & times
+    let deploymentsByProject: Record<string, DeploymentItem> = {};
+    try {
+      const { data: depsData } = await sb
+        .from('deployments')
+        .select('*')
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false });
+
+      if (depsData) {
+        for (const d of depsData) {
+          if (!deploymentsByProject[d.project_id]) {
+            deploymentsByProject[d.project_id] = {
+              id: d.id,
+              projectId: d.project_id,
+              organizationId: d.organization_id,
+              userId: d.user_id,
+              projectName: d.project_name || '',
+              status: d.status || 'ready',
+              url: d.deployment_url || d.url || '',
+              deploymentUrl: d.deployment_url || d.url,
+              storagePath: d.storage_path,
+              commitHash: d.commit_hash || 'HEAD',
+              commitMessage: d.commit_message,
+              creator: d.creator,
+              branch: d.branch,
+              durationSeconds: d.duration_seconds,
+              environment: d.environment || 'production',
+              createdAt: d.created_at,
+              completedAt: d.completed_at,
+            };
+          }
+        }
+      }
+    } catch {
+      // non-blocking
+    }
+
+    return (projectsData || []).map((p: any) => {
+      const latestDep = deploymentsByProject[p.id];
+      const prodDomain = p.production_domain || `https://${p.slug}.optic.doy.best`;
+      return {
+        id: p.id,
+        organization_id: p.organization_id || orgId,
+        name: p.name,
+        slug: p.slug,
+        description: p.description || undefined,
+        framework: p.framework || 'react',
+        productionDomain: prodDomain,
+        assignedSubdomain: p.assigned_subdomain || `${p.slug}.optic.doy.best`,
+        customDomains: p.custom_domains || [],
+        gitRepo: p.git_repo || undefined,
+        gitBranch: p.git_branch || 'main',
+        status: (latestDep?.status as any) || p.status || 'ready',
+        latestDeployment: latestDep,
+        createdAt: p.created_at || new Date().toISOString(),
+        updatedAt: latestDep?.createdAt || p.updated_at || new Date().toISOString(),
+      };
+    });
   },
 
   /**
@@ -738,7 +787,9 @@ export const supabaseData = {
     orgId: string,
     input: {
       name: string;
-      framework: 'static' | 'react' | 'vite' | 'nextjs' | 'astro' | 'html';
+      slug?: string;
+      description?: string;
+      framework?: 'static' | 'react' | 'vite' | 'nextjs' | 'astro' | 'html';
       gitRepo?: string;
       gitBranch?: string;
       creatorName?: string;
@@ -751,10 +802,11 @@ export const supabaseData = {
     }
 
     const cleanName = input.name.trim();
-    const slug = cleanName
+    const baseSlug = (input.slug || cleanName)
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '') || `app-${Math.random().toString(36).substring(2, 6)}`;
+    const slug = baseSlug;
     const subdomain = `${slug}.optic.doy.best`;
     const productionDomain = `https://${subdomain}`;
 
@@ -762,23 +814,29 @@ export const supabaseData = {
       organization_id: orgId,
       name: cleanName,
       slug,
-      framework: input.framework,
+      framework: input.framework || 'static',
     });
+
+    const projectInsertPayload: any = {
+      organization_id: orgId,
+      name: cleanName,
+      slug,
+      framework: input.framework || 'static',
+      production_domain: productionDomain,
+      assigned_subdomain: subdomain,
+      custom_domains: [],
+      git_repo: input.gitRepo || null,
+      git_branch: input.gitBranch || 'main',
+      status: 'ready',
+    };
+
+    if (input.description) {
+      projectInsertPayload.description = input.description.trim();
+    }
 
     const { data, error } = await sb
       .from('projects')
-      .insert({
-        organization_id: orgId,
-        name: cleanName,
-        slug,
-        framework: input.framework,
-        production_domain: productionDomain,
-        assigned_subdomain: subdomain,
-        custom_domains: [],
-        git_repo: input.gitRepo || null,
-        git_branch: input.gitBranch || 'main',
-        status: 'ready',
-      })
+      .insert(projectInsertPayload)
       .select()
       .single();
 
@@ -792,6 +850,7 @@ export const supabaseData = {
       organization_id: data.organization_id || orgId,
       name: data.name,
       slug: data.slug,
+      description: data.description,
       framework: data.framework,
       productionDomain: data.production_domain || productionDomain,
       assignedSubdomain: data.assigned_subdomain || subdomain,
@@ -802,20 +861,6 @@ export const supabaseData = {
       createdAt: data.created_at,
       updatedAt: data.updated_at,
     };
-
-    // Create initial deployment record in `public.deployments`
-    try {
-      await this.createDeployment(newProject.id, orgId, {
-        projectName: newProject.name,
-        commitMessage: 'Initial project setup & deployment',
-        creator: input.creatorName || 'developer',
-        branch: input.gitBranch || 'main',
-        environment: 'production',
-        url: newProject.productionDomain,
-      });
-    } catch (depErr) {
-      console.warn('[Supabase] Initial deployment creation notice:', depErr);
-    }
 
     return newProject;
   },
@@ -832,7 +877,12 @@ export const supabaseData = {
 
     console.log('[Supabase] Deleting project from public.projects:', { projectId, orgId });
 
-    const { error } = await sb.from('projects').delete().eq('id', projectId);
+    const { error } = await sb
+      .from('projects')
+      .delete()
+      .eq('id', projectId)
+      .eq('organization_id', orgId);
+
     if (error) {
       console.error('[Supabase] Error deleting project from public.projects:', error);
       throw error;
@@ -848,11 +898,16 @@ export const supabaseData = {
 
     console.log('[Supabase] Querying public.deployments for project:', projectId);
 
-    const { data, error } = await sb
+    let query = sb
       .from('deployments')
       .select('*')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false });
+      .eq('project_id', projectId);
+
+    if (orgId) {
+      query = query.eq('organization_id', orgId);
+    }
+
+    const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) {
       console.error('[Supabase] Error querying public.deployments:', error);
@@ -862,9 +917,13 @@ export const supabaseData = {
     return (data || []).map((d: any) => ({
       id: d.id,
       projectId: d.project_id,
+      organizationId: d.organization_id,
+      userId: d.user_id,
       projectName: d.project_name || 'project',
       status: d.status || 'ready',
-      url: d.url,
+      url: d.deployment_url || d.url || '',
+      deploymentUrl: d.deployment_url || d.url || '',
+      storagePath: d.storage_path || `deployments/${d.organization_id}/${d.project_id}/${d.id}`,
       commitHash: d.commit_hash || 'HEAD',
       commitMessage: d.commit_message || 'Deployment update',
       creator: d.creator || 'developer',
@@ -872,67 +931,213 @@ export const supabaseData = {
       durationSeconds: d.duration_seconds || 12,
       environment: d.environment || 'production',
       createdAt: d.created_at,
+      completedAt: d.completed_at,
     }));
   },
 
   /**
-   * Create a new deployment for a project in `public.deployments`
+   * Create a new deployment record in `public.deployments`
+   */
+  async createDeploymentRecord(params: {
+    id?: string;
+    projectId: string;
+    organizationId: string;
+    userId: string;
+    status: 'pending' | 'building' | 'ready' | 'failed' | 'queued';
+    deploymentUrl: string;
+    storagePath: string;
+    commitMessage?: string;
+    creator?: string;
+    branch?: string;
+  }): Promise<DeploymentItem> {
+    const sb = getSupabase();
+    if (!sb) {
+      throw new Error('Supabase client is not available.');
+    }
+
+    const deploymentId = params.id || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15));
+
+    console.log('[Supabase] Creating deployment record in public.deployments:', {
+      id: deploymentId,
+      project_id: params.projectId,
+      organization_id: params.organizationId,
+      status: params.status,
+    });
+
+    const payload: any = {
+      id: deploymentId,
+      project_id: params.projectId,
+      organization_id: params.organizationId,
+      user_id: params.userId,
+      status: params.status,
+      deployment_url: params.deploymentUrl,
+      url: params.deploymentUrl,
+      storage_path: params.storagePath,
+      commit_message: params.commitMessage || 'Manual deployment',
+      creator: params.creator || 'developer',
+      branch: params.branch || 'main',
+      environment: 'production',
+    };
+
+    let { data, error } = await sb
+      .from('deployments')
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error) {
+      console.warn('[Supabase] Retrying deployment insert with standard columns:', error.message);
+      // Fallback if some column names differ
+      const fallbackPayload: any = {
+        project_id: params.projectId,
+        organization_id: params.organizationId,
+        status: params.status,
+        url: params.deploymentUrl,
+      };
+      if (params.userId) fallbackPayload.user_id = params.userId;
+      if (params.storagePath) fallbackPayload.storage_path = params.storagePath;
+
+      const retryRes = await sb
+        .from('deployments')
+        .insert(fallbackPayload)
+        .select()
+        .single();
+
+      if (retryRes.error) {
+        console.error('[Supabase] Failed to insert deployment record:', retryRes.error);
+        throw retryRes.error;
+      }
+      data = retryRes.data;
+    }
+
+    return {
+      id: data.id,
+      projectId: data.project_id,
+      organizationId: data.organization_id,
+      userId: data.user_id,
+      status: data.status,
+      url: data.deployment_url || data.url,
+      deploymentUrl: data.deployment_url || data.url,
+      storagePath: data.storage_path || params.storagePath,
+      commitMessage: data.commit_message || params.commitMessage,
+      creator: data.creator || params.creator,
+      branch: data.branch || params.branch || 'main',
+      createdAt: data.created_at,
+      completedAt: data.completed_at,
+    };
+  },
+
+  /**
+   * Update deployment status and completion timestamp in `public.deployments`
+   */
+  async updateDeploymentStatus(
+    deploymentId: string,
+    status: 'pending' | 'building' | 'ready' | 'failed' | 'queued',
+    completedAt?: string
+  ): Promise<void> {
+    const sb = getSupabase();
+    if (!sb || !deploymentId) return;
+
+    console.log('[Supabase] Updating deployment status:', { deploymentId, status, completedAt });
+
+    const updatePayload: any = { status };
+    if (completedAt) {
+      updatePayload.completed_at = completedAt;
+    }
+
+    try {
+      const { error } = await sb
+        .from('deployments')
+        .update(updatePayload)
+        .eq('id', deploymentId);
+
+      if (error) {
+        console.warn('[Supabase] Error updating deployment status:', error.message);
+      }
+    } catch (err) {
+      console.warn('[Supabase] Exception updating deployment status:', err);
+    }
+  },
+
+  /**
+   * Insert a log event in `public.deployment_logs`
+   */
+  async addDeploymentLog(
+    deploymentId: string,
+    message: string,
+    level: 'info' | 'warn' | 'error' | 'success' = 'info'
+  ): Promise<void> {
+    const sb = getSupabase();
+    if (!sb || !deploymentId) return;
+
+    try {
+      const { error } = await sb.from('deployment_logs').insert({
+        deployment_id: deploymentId,
+        message,
+        level,
+        created_at: new Date().toISOString(),
+      });
+
+      if (error) {
+        console.warn('[Supabase] deployment_logs insert notice:', error.message);
+      }
+    } catch (err) {
+      console.warn('[Supabase] deployment_logs insert exception:', err);
+    }
+  },
+
+  /**
+   * Query deployment logs for a deployment from `public.deployment_logs`
+   */
+  async getDeploymentLogs(deploymentId: string): Promise<DeploymentLog[]> {
+    const sb = getSupabase();
+    if (!sb || !deploymentId) return [];
+
+    try {
+      const { data, error } = await sb
+        .from('deployment_logs')
+        .select('*')
+        .eq('deployment_id', deploymentId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.warn('[Supabase] Error fetching deployment_logs:', error.message);
+        return [];
+      }
+
+      return (data || []).map((l: any) => ({
+        id: l.id,
+        deploymentId: l.deployment_id,
+        timestamp: l.created_at ? new Date(l.created_at).toLocaleTimeString() : new Date().toLocaleTimeString(),
+        level: l.level || 'info',
+        message: l.message,
+      }));
+    } catch (err) {
+      console.warn('[Supabase] Exception fetching deployment_logs:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Backward-compatible createDeployment helper
    */
   async createDeployment(
     projectId: string,
     orgId: string,
     input: Partial<DeploymentItem>
   ): Promise<DeploymentItem> {
-    const sb = getSupabase();
-    if (!sb) {
-      console.error('[Supabase] Supabase client is not available in createDeployment.');
-      throw new Error('Supabase client is not available.');
-    }
-
-    const commitHash = input.commitHash || Math.random().toString(16).substring(2, 9);
-    const duration = input.durationSeconds || Math.floor(8 + Math.random() * 8);
-
-    console.log('[Supabase] Inserting deployment into public.deployments:', {
-      project_id: projectId,
-      organization_id: orgId,
+    return this.createDeploymentRecord({
+      id: input.id,
+      projectId,
+      organizationId: orgId,
+      userId: input.userId || '',
+      status: input.status || 'ready',
+      deploymentUrl: input.url || `https://${projectId}.optic.doy.best`,
+      storagePath: input.storagePath || `deployments/${orgId}/${projectId}/${input.id || 'initial'}`,
+      commitMessage: input.commitMessage || 'Manual deployment',
+      creator: input.creator || 'developer',
+      branch: input.branch || 'main',
     });
-
-    const { data, error } = await sb
-      .from('deployments')
-      .insert({
-        project_id: projectId,
-        organization_id: orgId,
-        status: input.status || 'ready',
-        url: input.url || 'https://app.optic.doy.best',
-        commit_hash: commitHash,
-        commit_message: input.commitMessage || 'Manual deployment',
-        creator: input.creator || 'developer',
-        branch: input.branch || 'main',
-        duration_seconds: duration,
-        environment: input.environment || 'production',
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('[Supabase] Error inserting deployment into public.deployments:', error);
-      throw error;
-    }
-
-    return {
-      id: data.id,
-      projectId: data.project_id,
-      projectName: input.projectName || 'project',
-      status: data.status,
-      url: data.url,
-      commitHash: data.commit_hash,
-      commitMessage: data.commit_message,
-      creator: data.creator,
-      branch: data.branch,
-      durationSeconds: data.duration_seconds,
-      environment: data.environment,
-      createdAt: data.created_at,
-    };
   },
 
   /**

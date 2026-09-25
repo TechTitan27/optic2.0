@@ -3,6 +3,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '../common/Card';
 import { Button } from '../common/Button';
 import { SurfaceType, FileItem, DeploymentItem, UsageStats } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useOrganization } from '../../context/OrganizationContext';
 import { supabaseData } from '../../lib/supabaseData';
 import { ServiceStatus } from './ServiceStatus';
 import { OpticTrailerModal } from '../trailer/OpticTrailerModal';
@@ -31,6 +32,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onSelectNav,
 }) => {
   const { user, profile } = useAuth();
+  const { currentOrg } = useOrganization();
   const [recentFiles, setRecentFiles] = useState<FileItem[]>([]);
   const [recentDeployments, setRecentDeployments] = useState<DeploymentItem[]>([]);
   const [usageStats, setUsageStats] = useState<UsageStats>({
@@ -65,10 +67,14 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
         // 1. Real query to `usage` table
         // 2. Real query to `files` table
         // 3. Hosting deployments API
+        const depUrl = currentOrg?.id
+          ? `/api/hosting/deployments?orgId=${currentOrg.id}&limit=4`
+          : '/api/hosting/deployments?limit=4';
+
         const [usage, files, depRes] = await Promise.all([
           userId ? supabaseData.getUserUsage(userId) : Promise.resolve(null),
           userId ? supabaseData.getRecentFiles(userId, 4) : Promise.resolve([]),
-          fetch('/api/hosting/deployments?limit=4').catch(() => null),
+          fetch(depUrl).catch(() => null),
         ]);
 
         if (!mounted) return;

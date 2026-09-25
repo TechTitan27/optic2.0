@@ -7,6 +7,8 @@ import {
   createPresignedDownloadUrl,
   deleteStorageFile,
   cleanupOrphanedObject,
+  createDeploymentPresignedUploadUrl,
+  createSharePresignedUrls,
 } from './r2Storage.js';
 
 interface WaitlistEntry {
@@ -443,6 +445,76 @@ export async function handleApiRequest(
     }
   }
 
+  // 7b. POST /api/hosting/deployments/upload-url or /api/hosting/upload-url
+  if (
+    (url.startsWith('/api/hosting/deployments/upload-url') ||
+      url.startsWith('/api/hosting/upload-url')) &&
+    method === 'POST'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+
+      if (!user) {
+        return sendJson(res, 401, {
+          success: false,
+          error: 'Unauthorized. Please sign in to create hosting deployments.',
+        });
+      }
+
+      const r2Config = getR2Config();
+      if (!r2Config.isConfigured) {
+        return sendJson(res, 503, {
+          success: false,
+          error:
+            'Storage is not configured. Server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.',
+        });
+      }
+
+      const body = await parseJsonBody(req);
+      const { organizationId, projectId, deploymentId, filePath, mimeType, size } = body;
+
+      if (!organizationId || !projectId || !deploymentId || !filePath) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'organizationId, projectId, deploymentId, and filePath are required.',
+        });
+      }
+
+      const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+
+      const result = await createDeploymentPresignedUploadUrl({
+        userId: user.id,
+        organizationId,
+        projectId,
+        deploymentId,
+        filePath,
+        mimeType: mimeType || 'application/octet-stream',
+        size: Number(size || 0),
+        userToken: token,
+      });
+
+      return sendJson(res, 200, {
+        success: true,
+        ...result,
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/deployments/upload-url] Error:', err);
+      const message = err?.message || 'Failed to generate deployment upload URL.';
+      const status =
+        message.includes('permission') || message.includes('Unauthorized')
+          ? 403
+          : message.includes('not found') || message.includes('belong')
+          ? 404
+          : message.includes('too large') || message.includes('exceeds')
+          ? 400
+          : message.includes('Storage is not configured')
+          ? 503
+          : 500;
+      return sendJson(res, status, { success: false, error: message });
+    }
+  }
+
   // 8. GET /api/hosting/projects
   if (url.startsWith('/api/hosting/projects') && method === 'GET') {
     try {
@@ -503,6 +575,162 @@ export async function handleApiRequest(
     } catch (err: any) {
       console.error('[API /api/organizations] Uncaught exception:', err);
       return sendJson(res, 500, { success: false, error: 'Failed to fetch organizations' });
+    }
+  }
+
+  // 9b. GET /api/storage/share (Public Shared File Access & Presigned URL Generation)
+  if (url.startsWith('/api/storage/share') && method === 'GET') {
+    try {
+      const parsedUrl = new URL(url, 'http://localhost');
+      let token = parsedUrl.searchParams.get('token');
+      if (!token && parsedUrl.pathname !== '/api/storage/share') {
+        const parts = parsedUrl.pathname.split('/').filter(Boolean);
+        // e.g. ['api', 'storage', 'share', 'abc123']
+        if (parts.length >= 4) {
+          token = parts[3];
+        }
+      }
+
+      if (!token) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'Share token is required.',
+        });
+      }
+
+      // Supabase server client (uses service role key to query public.share_links for unauthenticated visitors)
+      const sb = getSupabaseServerClient();
+      if (!sb) {
+        return sendJson(res, 503, {
+          success: false,
+          error: 'Database connection unavailable.',
+        });
+      }
+
+      // 1. Find share_links row by token
+      const { data: shareLink, error: shareErr } = await sb
+        .from('share_links')
+        .select('*')
+        .eq('token', token)
+        .maybeSingle();
+
+      if (shareErr) {
+        console.error('[API /api/storage/share] Supabase query error:', shareErr);
+        return sendJson(res, 500, {
+          success: false,
+          error: 'Failed to look up share link.',
+        });
+      }
+
+      if (!shareLink) {
+        return sendJson(res, 404, {
+          success: false,
+          notFound: true,
+          error: 'Share link not found.',
+        });
+      }
+
+      // 2. Check if expired
+      if (shareLink.expires_at) {
+        const isExpired = new Date(shareLink.expires_at).getTime() < Date.now();
+        if (isExpired) {
+          return sendJson(res, 410, {
+            success: false,
+            expired: true,
+            error: 'This link has expired.',
+          });
+        }
+      }
+
+      // 3. Fetch associated file from public.files
+      const { data: file, error: fileErr } = await sb
+        .from('files')
+        .select('id, user_id, name, extension, mime_type, size_bytes, storage_key, created_at, updated_at')
+        .eq('id', shareLink.file_id)
+        .maybeSingle();
+
+      if (fileErr || !file) {
+        return sendJson(res, 404, {
+          success: false,
+          notFound: true,
+          error: 'File not found.',
+        });
+      }
+
+      // 4. Retrieve uploader's display name from profiles table (explicitly do NOT expose email)
+      let uploaderName = 'Optic User';
+      try {
+        const { data: profile } = await sb
+          .from('profiles')
+          .select('id, display_name, full_name, name')
+          .eq('id', file.user_id)
+          .maybeSingle();
+
+        if (profile) {
+          uploaderName =
+            profile.display_name || profile.full_name || profile.name || 'Optic User';
+        }
+      } catch (pErr) {
+        console.warn('[API /api/storage/share] Profile query warning:', pErr);
+      }
+
+      // 5. Generate short-lived presigned GET URLs from R2
+      let previewUrl = '';
+      let downloadUrl = '';
+      const r2Config = getR2Config();
+
+      if (r2Config.isConfigured && file.storage_key) {
+        try {
+          const urls = await createSharePresignedUrls({
+            storageKey: file.storage_key,
+            filename: file.name,
+            mimeType: file.mime_type || 'application/octet-stream',
+          });
+          previewUrl = urls.previewUrl;
+          downloadUrl = urls.downloadUrl;
+        } catch (r2Err) {
+          console.error('[API /api/storage/share] Presigned URL error:', r2Err);
+        }
+      }
+
+      // If ?download=1 was requested directly, redirect to download URL
+      const isDownloadRedirect =
+        parsedUrl.searchParams.get('download') === '1' ||
+        parsedUrl.pathname.endsWith('/download');
+
+      if (isDownloadRedirect && downloadUrl) {
+        res.writeHead(302, { Location: downloadUrl });
+        return res.end();
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        share: {
+          token: shareLink.token,
+          expiresAt: shareLink.expires_at || null,
+          createdAt: shareLink.created_at,
+        },
+        file: {
+          id: file.id,
+          name: file.name,
+          extension: file.extension || (file.name.includes('.') ? file.name.split('.').pop() : ''),
+          mimeType: file.mime_type || 'application/octet-stream',
+          sizeBytes: file.size_bytes || 0,
+          createdAt: file.created_at,
+          updatedAt: file.updated_at,
+        },
+        uploader: {
+          name: uploaderName,
+        },
+        previewUrl,
+        downloadUrl,
+      });
+    } catch (err: any) {
+      console.error('[API /api/storage/share] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to process share link',
+      });
     }
   }
 

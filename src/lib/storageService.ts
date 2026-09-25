@@ -109,6 +109,55 @@ export class OpticStorageService {
   }
 
   /**
+   * Request a short-lived presigned PUT URL for a hosting deployment file
+   */
+  async requestDeploymentUploadUrl(params: {
+    organizationId: string;
+    projectId: string;
+    deploymentId: string;
+    filePath: string;
+    mimeType: string;
+    size: number;
+  }): Promise<{ uploadUrl: string; storageKey: string; expiresIn: number }> {
+    const token = await this.getAuthToken();
+    if (!token) {
+      throw new Error('You must be signed in to upload deployment files.');
+    }
+
+    // Try dedicated deployment upload-url endpoint first, fallback to general
+    let res = await fetch('/api/hosting/deployments/upload-url', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(params),
+    });
+
+    if (res.status === 404) {
+      res = await fetch('/api/hosting/upload-url', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(params),
+      });
+    }
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Failed to generate deployment upload URL');
+    }
+
+    return {
+      uploadUrl: data.uploadUrl,
+      storageKey: data.storageKey,
+      expiresIn: data.expiresIn || 900,
+    };
+  }
+
+  /**
    * Directly PUT file bytes to Cloudflare R2 with progress monitoring
    */
   async uploadDirectToR2(
@@ -209,6 +258,48 @@ export class OpticStorageService {
       filename: data.filename || 'download',
       mimeType: data.mimeType || 'application/octet-stream',
     };
+  }
+
+  /**
+   * Fetch public shared file metadata and short-lived presigned URLs (unauthenticated access)
+   */
+  async getSharedFile(token: string): Promise<{
+    success: boolean;
+    share?: {
+      token: string;
+      expiresAt: string | null;
+      createdAt: string;
+    };
+    file?: {
+      id: string;
+      name: string;
+      extension: string;
+      mimeType: string;
+      sizeBytes: number;
+      createdAt: string;
+      updatedAt: string;
+    };
+    uploader?: {
+      name: string;
+    };
+    previewUrl?: string;
+    downloadUrl?: string;
+    expired?: boolean;
+    notFound?: boolean;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/storage/share?token=${encodeURIComponent(token)}`, {
+        method: 'GET',
+      });
+      const data = await res.json();
+      return data;
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || 'Failed to connect to storage service.',
+      };
+    }
   }
 
   /**

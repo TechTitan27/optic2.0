@@ -263,6 +263,56 @@ export async function createPresignedDownloadUrl(params: {
 }
 
 /**
+ * Generate short-lived presigned GET URLs for a public share link (both inline preview and attachment download)
+ */
+export async function createSharePresignedUrls(params: {
+  storageKey: string;
+  filename: string;
+  mimeType: string;
+}): Promise<{ previewUrl: string; downloadUrl: string }> {
+  const { storageKey, filename, mimeType } = params;
+  const config = getR2Config();
+
+  if (!config.isConfigured) {
+    throw new Error(
+      'Storage is not configured. Server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.'
+    );
+  }
+
+  const client = getR2Client();
+  if (!client || !config.bucketName) {
+    throw new Error('Failed to initialize Cloudflare R2 client.');
+  }
+
+  if (!storageKey) {
+    throw new Error('Missing storage key for shared file.');
+  }
+
+  const cleanFilename = sanitizeFilename(filename);
+  const expiresIn = 900; // 15 minutes
+
+  // 1. Preview URL with inline disposition for browser rendering
+  const previewCommand = new GetObjectCommand({
+    Bucket: config.bucketName,
+    Key: storageKey,
+    ResponseContentDisposition: `inline; filename="${encodeURIComponent(cleanFilename)}"`,
+    ResponseContentType: mimeType || 'application/octet-stream',
+  });
+  const previewUrl = await getSignedUrl(client, previewCommand, { expiresIn });
+
+  // 2. Download URL with attachment disposition so clicking triggers save as original filename
+  const downloadCommand = new GetObjectCommand({
+    Bucket: config.bucketName,
+    Key: storageKey,
+    ResponseContentDisposition: `attachment; filename="${encodeURIComponent(cleanFilename)}"`,
+    ResponseContentType: mimeType || 'application/octet-stream',
+  });
+  const downloadUrl = await getSignedUrl(client, downloadCommand, { expiresIn });
+
+  return { previewUrl, downloadUrl };
+}
+
+/**
  * Delete file from Cloudflare R2 and Supabase PostgreSQL
  */
 export async function deleteStorageFile(params: {
@@ -380,4 +430,113 @@ export async function cleanupOrphanedObject(params: {
     console.warn('[R2 Cleanup] Failed to delete orphaned object:', err);
     return false;
   }
+}
+
+/**
+ * Sanitize relative file path for static website deployment
+ */
+export function sanitizeDeploymentPath(filePath: string): string {
+  if (!filePath) return 'index.html';
+  // Normalize backslashes, strip leading/trailing slashes
+  const clean = filePath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '').trim();
+  // Prevent directory traversal
+  const segments = clean.split('/').filter((s) => s && s !== '.' && s !== '..');
+  const safeSegments = segments.map((seg) => seg.replace(/[^a-zA-Z0-9._-]/g, '_'));
+  return safeSegments.join('/') || 'index.html';
+}
+
+/**
+ * Generate a presigned PUT URL for uploading a file in a static website deployment.
+ * Strictly isolates deployment files under:
+ * deployments/{organizationId}/{projectId}/{deploymentId}/...
+ */
+export async function createDeploymentPresignedUploadUrl(params: {
+  userId: string;
+  organizationId: string;
+  projectId: string;
+  deploymentId: string;
+  filePath: string;
+  mimeType: string;
+  size: number;
+  userToken?: string;
+}): Promise<{ uploadUrl: string; storageKey: string; expiresIn: number }> {
+  const { userId, organizationId, projectId, deploymentId, filePath, mimeType, size, userToken } =
+    params;
+  const config = getR2Config();
+
+  if (!config.isConfigured) {
+    throw new Error(
+      'Storage is not configured. Server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.'
+    );
+  }
+
+  const client = getR2Client();
+  if (!client || !config.bucketName) {
+    throw new Error('Failed to initialize Cloudflare R2 client.');
+  }
+
+  // 1. Verify organization membership
+  const sb = getSupabaseServerClient(userToken);
+  if (sb) {
+    const { data: member, error: memErr } = await sb
+      .from('organization_members')
+      .select('id, role')
+      .eq('organization_id', organizationId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (memErr || !member) {
+      const { data: org } = await sb
+        .from('organizations')
+        .select('id, created_by')
+        .eq('id', organizationId)
+        .maybeSingle();
+
+      if (!org || org.created_by !== userId) {
+        throw new Error("You don't have permission to deploy to this organization.");
+      }
+    }
+
+    // Verify project belongs to organization
+    const { data: proj } = await sb
+      .from('projects')
+      .select('id, organization_id')
+      .eq('id', projectId)
+      .maybeSingle();
+
+    if (proj && proj.organization_id !== organizationId) {
+      throw new Error('Project does not belong to this organization.');
+    }
+  }
+
+  // 2. Validate sanitized relative path
+  const safeRelPath = sanitizeDeploymentPath(filePath);
+
+  // 3. Isolated key strictly under deployments/{orgId}/{projectId}/{deploymentId}/...
+  const storageKey = `deployments/${organizationId}/${projectId}/${deploymentId}/${safeRelPath}`;
+
+  // 4. Validate MIME and size (max 500 MB per single static deployment file)
+  const cleanMime = mimeType || 'application/octet-stream';
+  const maxSizeBytes = 500 * 1024 * 1024;
+  if (size > maxSizeBytes) {
+    throw new Error('File exceeds maximum size of 500 MB for static hosting assets.');
+  }
+
+  // 5. Generate presigned URL
+  const expiresIn = 900;
+  const command = new PutObjectCommand({
+    Bucket: config.bucketName,
+    Key: storageKey,
+    ContentType: cleanMime,
+  });
+
+  const uploadUrl = await getSignedUrl(client, command, { expiresIn });
+
+  ensureR2Cors().catch(() => {});
+
+  return {
+    uploadUrl,
+    storageKey,
+    expiresIn,
+  };
 }

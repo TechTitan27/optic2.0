@@ -1,11 +1,10 @@
 /**
- * Avatar utility supporting deterministic DiceBear avatars with fallback and custom avatar storage in Supabase.
+ * Avatar utility supporting dynamic deterministic DiceBear avatars:
  *
  * Rules:
- * - User avatars: DiceBear `notionists` style using user NAME as deterministic seed (NEVER user ID / UUID).
- * - Organization avatars: DiceBear `glass` style using organization NAME / SLUG as deterministic seed.
- * - Stored in Supabase: Stored in Supabase user metadata and profile state so it remains consistent across all subdomains.
- * - Google OAuth filter: Never display Google profile pictures (googleusercontent.com) over the Optic DiceBear avatar.
+ * - User avatar: DiceBear `notionists`, seeded with user UUID.
+ * - Organization avatar: DiceBear `glass`, seeded with organization UUID.
+ * - Generated dynamically. Do not upload avatar files.
  */
 
 export interface AvatarEntity {
@@ -39,43 +38,22 @@ export function isThirdPartyOAuthAvatar(url?: string | null): boolean {
 }
 
 /**
- * Extracts the user's display name or name seed for deterministic DiceBear generation.
- * NEVER uses the user UUID / ID.
+ * Generates the canonical DiceBear `notionists` avatar URL for a given seed (user UUID).
  */
-export function getUserNameSeed(user?: AvatarEntity | null): string {
-  if (!user) return 'Optic Developer';
-
-  const meta = (user as any)?.user_metadata;
-  const candidate =
-    user.fullName?.trim() ||
-    user.name?.trim() ||
-    meta?.full_name?.trim() ||
-    meta?.name?.trim() ||
-    (user.email ? user.email.split('@')[0].trim() : '') ||
-    'Optic Developer';
-
-  return candidate || 'Optic Developer';
-}
-
-/**
- * Generates the canonical DiceBear `notionists` avatar URL for a given name seed.
- */
-export function getDiceBearAvatarUrl(name: string): string {
-  const clean = name.trim() || 'Optic Developer';
+export function getDiceBearAvatarUrl(seed: string): string {
+  const clean = seed.trim() || 'optic-user';
   return `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(clean)}`;
 }
 
 /**
- * Returns deterministic DiceBear `notionists` avatar for a user based on their NAME.
- * Excludes third-party OAuth images (such as Google profile photos from lh3.googleusercontent.com).
- * The seed is explicitly based on the user's name, NEVER their UUID/ID.
+ * Returns dynamic DiceBear `notionists` avatar for a user seeded with user UUID.
  */
 export function getUserAvatarUrl(user?: AvatarEntity | null): string {
   if (!user) {
-    return getDiceBearAvatarUrl('Optic Developer');
+    return getDiceBearAvatarUrl('optic-user');
   }
 
-  // 1. Direct explicit avatarUrl (ensure it's not a Google OAuth photo)
+  // 1. Direct explicit non-third-party avatarUrl if explicitly configured
   if (
     user.avatarUrl &&
     typeof user.avatarUrl === 'string' &&
@@ -85,63 +63,46 @@ export function getUserAvatarUrl(user?: AvatarEntity | null): string {
     return user.avatarUrl.trim();
   }
 
-  // 2. User metadata avatar_url (ensure it's not a Google OAuth photo)
-  const meta = (user as any)?.user_metadata;
-  if (
-    meta?.optic_avatar_url &&
-    typeof meta.optic_avatar_url === 'string' &&
-    meta.optic_avatar_url.trim().length > 0
-  ) {
-    return meta.optic_avatar_url.trim();
+  // 2. User UUID seed (DiceBear notionists)
+  if (user.id && user.id.trim().length > 0) {
+    return getDiceBearAvatarUrl(user.id.trim());
   }
 
-  if (
-    meta?.avatar_url &&
-    typeof meta.avatar_url === 'string' &&
-    meta.avatar_url.trim().length > 0 &&
-    !isThirdPartyOAuthAvatar(meta.avatar_url)
-  ) {
-    return meta.avatar_url.trim();
-  }
+  // 3. Fallback to name or email seed if id not yet loaded
+  const fallbackSeed =
+    user.fullName?.trim() ||
+    user.name?.trim() ||
+    user.user_metadata?.full_name?.trim() ||
+    user.user_metadata?.name?.trim() ||
+    (user.email ? user.email.split('@')[0].trim() : '') ||
+    'optic-user';
 
-  // 3. Name-based seed (NOT the user ID / UUID)
-  const nameSeed = getUserNameSeed(user);
-  return getDiceBearAvatarUrl(nameSeed);
+  return getDiceBearAvatarUrl(fallbackSeed);
 }
 
 /**
- * Extracts the organization name seed for deterministic DiceBear generation.
- * NEVER uses the organization UUID / ID.
+ * Generates the canonical DiceBear `glass` avatar URL for an organization based on its UUID seed.
  */
-export function getOrgNameSeed(org?: (AvatarEntity & { name?: string }) | null): string {
-  if (!org) return 'Optic Organization';
-  return org.name?.trim() || 'Optic Organization';
-}
-
-/**
- * Generates the canonical DiceBear `glass` avatar URL for an organization based on its NAME.
- * NEVER uses the organization UUID / ID as the seed.
- */
-export function getDiceBearOrgAvatarUrl(orgName: string): string {
-  const clean = orgName.trim() || 'Optic Organization';
+export function getDiceBearOrgAvatarUrl(orgUuidOrSeed: string): string {
+  const clean = orgUuidOrSeed.trim() || 'optic-org';
   return `https://api.dicebear.com/9.x/glass/svg?seed=${encodeURIComponent(clean)}`;
 }
 
 /**
- * Returns deterministic DiceBear `glass` avatar for an organization using its NAME as the seed.
- * Excludes third-party OAuth URLs and never uses the organization UUID / ID.
+ * Returns dynamic DiceBear `glass` avatar for an organization seeded with organization UUID.
  */
-export function getOrgAvatarUrl(org?: (AvatarEntity & { name?: string }) | null): string {
-  if (
-    org?.avatarUrl &&
-    typeof org.avatarUrl === 'string' &&
-    org.avatarUrl.trim().length > 0 &&
-    !isThirdPartyOAuthAvatar(org.avatarUrl)
-  ) {
-    return org.avatarUrl.trim();
+export function getOrgAvatarUrl(org?: (AvatarEntity & { name?: string; slug?: string }) | null): string {
+  if (!org) {
+    return getDiceBearOrgAvatarUrl('optic-org');
   }
 
-  // Strictly use organization NAME as deterministic seed (NEVER the org ID or UUID)
-  const nameSeed = getOrgNameSeed(org);
-  return getDiceBearOrgAvatarUrl(nameSeed);
+  // 1. Organization UUID seed (DiceBear glass)
+  if (org.id && org.id.trim().length > 0) {
+    return getDiceBearOrgAvatarUrl(org.id.trim());
+  }
+
+  // 2. Fallback to slug or name if UUID not yet assigned
+  const fallbackSeed = org.slug?.trim() || org.name?.trim() || 'optic-org';
+  return getDiceBearOrgAvatarUrl(fallbackSeed);
 }
+

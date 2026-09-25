@@ -11,7 +11,33 @@ export type SurfaceType =
   | 'callback'
   | 'privacy'
   | 'terms'
+  | 'share'
   | 'notfound';
+
+export interface SharedFileData {
+  share: {
+    token: string;
+    expiresAt: string | null;
+    createdAt: string;
+  };
+  file: {
+    id: string;
+    name: string;
+    extension: string;
+    mimeType: string;
+    sizeBytes: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+  uploader: {
+    name: string;
+  };
+  previewUrl?: string;
+  downloadUrl?: string;
+  expired?: boolean;
+  notFound?: boolean;
+  error?: string;
+}
 
 export interface UserProfile {
   id: string;
@@ -88,13 +114,14 @@ export interface HostingProject {
   organization_id: string;
   name: string;
   slug: string;
+  description?: string;
   framework: 'static' | 'react' | 'vite' | 'nextjs' | 'astro' | 'html';
   productionDomain: string;
   assignedSubdomain: string;
   customDomains: string[];
   gitRepo?: string;
   gitBranch?: string;
-  status: 'ready' | 'building' | 'failed' | 'queued';
+  status: 'ready' | 'building' | 'failed' | 'queued' | 'pending';
   latestDeployment?: DeploymentItem;
   createdAt: string;
   updatedAt: string;
@@ -103,16 +130,21 @@ export interface HostingProject {
 export interface DeploymentItem {
   id: string;
   projectId: string;
-  projectName: string;
-  status: 'ready' | 'building' | 'failed' | 'queued';
+  organizationId?: string;
+  userId?: string;
+  projectName?: string;
+  status: 'ready' | 'building' | 'failed' | 'queued' | 'pending';
   url: string;
+  deploymentUrl?: string;
+  storagePath?: string;
   commitHash?: string;
   commitMessage?: string;
-  creator: string;
-  branch: string;
+  creator?: string;
+  branch?: string;
   durationSeconds?: number;
-  environment: 'production' | 'preview';
+  environment?: 'production' | 'preview';
   createdAt: string;
+  completedAt?: string | null;
 }
 
 export interface DeploymentLog {
