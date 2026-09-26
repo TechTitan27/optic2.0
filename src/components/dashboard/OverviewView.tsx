@@ -6,7 +6,6 @@ import { useAuth } from '../../context/AuthContext';
 import { useOrganization } from '../../context/OrganizationContext';
 import { supabaseData } from '../../lib/supabaseData';
 import { ServiceStatus } from './ServiceStatus';
-import { OpticTrailerModal } from '../trailer/OpticTrailerModal';
 import {
   HardDrive,
   Globe,
@@ -19,7 +18,6 @@ import {
   Settings,
   User as UserIcon,
   ShieldCheck,
-  Play,
 } from 'lucide-react';
 
 interface OverviewViewProps {
@@ -46,7 +44,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
     apiRequestsLimit: 100000,
   });
   const [loading, setLoading] = useState(true);
-  const [isTrailerOpen, setIsTrailerOpen] = useState(false);
 
   // Time of day greeting
   const getGreeting = () => {
@@ -170,15 +167,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
 
         {/* Quick Navigation to Account & API Keys */}
         <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setIsTrailerOpen(true)}
-            icon={<Play size={13} className="fill-rose-400 text-rose-400" />}
-            className="text-xs border-zinc-750 hover:bg-zinc-800"
-          >
-            Launch Reel (48s)
-          </Button>
           <Button
             size="sm"
             variant="outline"
@@ -387,13 +375,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Cinematic Product Trailer Modal */}
-      <OpticTrailerModal
-        isOpen={isTrailerOpen}
-        onClose={() => setIsTrailerOpen(false)}
-        onNavigateSurface={onNavigateSurface}
-      />
     </div>
   );
 };

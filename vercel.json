@@ -2,6 +2,14 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/status",
+      "destination": "/api/status"
+    },
+    {
+      "source": "/api/status",
+      "destination": "/api/status"
+    },
+    {
       "source": "/api/keys/:action*",
       "destination": "/api/keys/:action*"
     },

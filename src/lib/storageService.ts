@@ -49,7 +49,13 @@ export class OpticStorageService {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch('/api/storage/status', { headers });
+      let res = await fetch('/status', { headers });
+      if (!res.ok) {
+        res = await fetch('/api/status', { headers });
+      }
+      if (!res.ok) {
+        res = await fetch('/api/storage/status', { headers });
+      }
       if (res.ok) {
         const data = await res.json();
         return data;

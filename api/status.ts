@@ -1,5 +1,5 @@
-import { getR2Config } from '../../src/server/r2Storage.js';
-import { getSupabaseSecretKey, getSupabaseAnonKey } from '../../src/server/supabaseServer.js';
+import { getR2Config } from '../src/server/r2Storage.js';
+import { getSupabaseSecretKey, getSupabaseAnonKey } from '../src/server/supabaseServer.js';
 
 export default async function handler(req: any, res: any) {
   if (req.method === 'OPTIONS') {
@@ -21,12 +21,6 @@ export default async function handler(req: any, res: any) {
     success: true,
     service: 'Optic Cloud & Edge Platform',
     timestamp: new Date().toISOString(),
-    isConfigured: config.isConfigured,
-    provider: 'Cloudflare R2',
-    bucketName: config.bucketName || null,
-    hasAccountId: Boolean(config.accountId),
-    hasAccessKey: Boolean(config.accessKeyId),
-    hasSecretKey: Boolean(config.secretAccessKey),
     storage: {
       provider: 'Cloudflare R2',
       configured: config.isConfigured,

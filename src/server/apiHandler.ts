@@ -1,6 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import crypto from 'crypto';
-import { getSupabaseServerClient, verifyUserToken } from './supabaseServer.js';
+import {
+  getSupabaseServerClient,
+  verifyUserToken,
+  getSupabaseSecretKey,
+  getSupabaseAnonKey,
+} from './supabaseServer.js';
 import {
   getR2Config,
   createPresignedUploadUrl,
@@ -76,7 +81,7 @@ export async function handleApiRequest(
 ) {
   const url = req.url || '';
 
-  if (!url.startsWith('/api/')) {
+  if (!url.startsWith('/api/') && !url.startsWith('/status')) {
     return next();
   }
 
@@ -932,19 +937,37 @@ export async function handleApiRequest(
     }
   }
 
-  // 13. GET /api/storage/status
-  if (url.startsWith('/api/storage/status') && method === 'GET') {
+  // 13. GET /status, /api/status, or /api/storage/status
+  const isStatusEndpoint =
+    (url === '/status' ||
+      url.startsWith('/status?') ||
+      url === '/api/status' ||
+      url.startsWith('/api/status?') ||
+      url.startsWith('/api/storage/status')) &&
+    method === 'GET';
+
+  if (isStatusEndpoint) {
     const config = getR2Config();
+    const hasDb = Boolean(getSupabaseSecretKey() || getSupabaseAnonKey());
     return sendJson(res, 200, {
+      status: 'ok',
       success: true,
-      isConfigured: config.isConfigured,
-      provider: 'Cloudflare R2',
-      bucketName: config.bucketName || null,
-      hasAccountId: Boolean(config.accountId),
-      hasAccessKey: Boolean(config.accessKeyId),
-      hasSecretKey: Boolean(config.secretAccessKey),
+      service: 'Optic Cloud & Edge Platform',
+      timestamp: new Date().toISOString(),
+      storage: {
+        provider: 'Cloudflare R2',
+        configured: config.isConfigured,
+        bucket: config.bucketName || null,
+        hasAccountId: Boolean(config.accountId),
+        hasAccessKey: Boolean(config.accessKeyId),
+        hasSecretKey: Boolean(config.secretAccessKey),
+      },
+      database: {
+        provider: 'Supabase PostgreSQL',
+        configured: hasDb,
+      },
       notice: config.isConfigured
-        ? 'Cloudflare R2 is configured and ready for presigned uploads.'
+        ? 'Cloudflare R2 is configured and ready.'
         : 'Cloudflare R2 server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.',
     });
   }
