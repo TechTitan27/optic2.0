@@ -25,7 +25,6 @@ import {
 import { SurfaceType, SharedFileData } from '../../types';
 import { getShareTokenFromPath } from '../../lib/domainNavigation';
 import { OpticStorageService } from '../../lib/storageService';
-import { getSupabase } from '../../lib/supabaseClient';
 import { useToast } from '../../context/ToastContext';
 
 interface PublicSharePageProps {
@@ -132,7 +131,10 @@ function getFileFriendlyType(category: FileCategory, ext: string = '', mimeType:
 
 export function PublicSharePage({ path, onNavigate }: PublicSharePageProps) {
   const toast = useToast();
-  const token = getShareTokenFromPath(path) || '';
+  const token =
+    getShareTokenFromPath(path) ||
+    (typeof window !== 'undefined' ? getShareTokenFromPath(window.location.pathname) : null) ||
+    '';
 
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<SharedFileData | null>(null);
@@ -164,85 +166,19 @@ export function PublicSharePage({ path, onNavigate }: PublicSharePageProps) {
       setErrorState(null);
 
       try {
-        let result = await storageService.getSharedFile(token);
-
-        if (
-          !result.success &&
-          (result.error?.includes('Database') || result.error?.includes('Failed to connect') || result.error?.includes('unavailable'))
-        ) {
-          const sb = getSupabase();
-          if (sb) {
-            try {
-              const { data: shareLink } = await sb
-                .from('share_links')
-                .select('*')
-                .eq('token', token)
-                .maybeSingle();
-
-              if (shareLink) {
-                if (shareLink.expires_at && new Date(shareLink.expires_at).getTime() < Date.now()) {
-                  result = { success: false, expired: true, error: 'This share link has expired.' };
-                } else {
-                  const { data: fileItem } = await sb
-                    .from('files')
-                    .select('*')
-                    .eq('id', shareLink.file_id)
-                    .maybeSingle();
-
-                  if (fileItem) {
-                    let uploaderName = 'Optic User';
-                    try {
-                      const { data: profile } = await sb
-                        .from('profiles')
-                        .select('id, display_name, full_name, name')
-                        .eq('id', fileItem.user_id)
-                        .maybeSingle();
-                      if (profile) {
-                        uploaderName = profile.display_name || profile.full_name || profile.name || 'Optic User';
-                      }
-                    } catch {}
-
-                    result = {
-                      success: true,
-                      share: {
-                        token: shareLink.token,
-                        expiresAt: shareLink.expires_at || null,
-                        createdAt: shareLink.created_at,
-                      },
-                      file: {
-                        id: fileItem.id,
-                        name: fileItem.name,
-                        extension:
-                          fileItem.extension ||
-                          (fileItem.name.includes('.') ? fileItem.name.split('.').pop() || '' : ''),
-                        mimeType: fileItem.mime_type || 'application/octet-stream',
-                        sizeBytes: fileItem.size_bytes || 0,
-                        createdAt: fileItem.created_at,
-                        updatedAt: fileItem.updated_at,
-                      },
-                      uploader: {
-                        name: uploaderName,
-                      },
-                      previewUrl: fileItem.public_url || '',
-                      downloadUrl: fileItem.public_url || '',
-                    };
-                  }
-                }
-              }
-            } catch (fallbackErr) {
-              console.warn('[PublicSharePage] Direct DB query fallback notice:', fallbackErr);
-            }
-          }
-        }
+        const result = await storageService.getSharedFile(token);
 
         if (!isMounted) return;
 
         if (result.expired) {
           setErrorState('expired');
-          setErrorMessage(result.error || 'This share link has expired.');
-        } else if (result.notFound || !result.success || !result.file) {
+          setErrorMessage(result.error || 'This link has expired.');
+        } else if (result.notFound) {
           setErrorState('not_found');
           setErrorMessage(result.error || 'File not found or share link is invalid.');
+        } else if (!result.success || !result.file) {
+          setErrorState('error');
+          setErrorMessage(result.error || 'Unable to load shared file.');
         } else {
           setData(result as SharedFileData);
 

@@ -289,13 +289,15 @@ export async function createSharePresignedUrls(params: {
   }
 
   const cleanFilename = sanitizeFilename(filename);
+  const safeAscii = cleanFilename.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const encoded = encodeURIComponent(cleanFilename);
   const expiresIn = 900; // 15 minutes
 
   // 1. Preview URL with inline disposition for browser rendering
   const previewCommand = new GetObjectCommand({
     Bucket: config.bucketName,
     Key: storageKey,
-    ResponseContentDisposition: `inline; filename="${encodeURIComponent(cleanFilename)}"`,
+    ResponseContentDisposition: `inline; filename="${safeAscii}"; filename*=UTF-8''${encoded}`,
     ResponseContentType: mimeType || 'application/octet-stream',
   });
   const previewUrl = await getSignedUrl(client, previewCommand, { expiresIn });
@@ -304,7 +306,7 @@ export async function createSharePresignedUrls(params: {
   const downloadCommand = new GetObjectCommand({
     Bucket: config.bucketName,
     Key: storageKey,
-    ResponseContentDisposition: `attachment; filename="${encodeURIComponent(cleanFilename)}"`,
+    ResponseContentDisposition: `attachment; filename="${safeAscii}"; filename*=UTF-8''${encoded}`,
     ResponseContentType: mimeType || 'application/octet-stream',
   });
   const downloadUrl = await getSignedUrl(client, downloadCommand, { expiresIn });

@@ -582,12 +582,21 @@ export async function handleApiRequest(
   if (url.startsWith('/api/storage/share') && method === 'GET') {
     try {
       const parsedUrl = new URL(url, 'http://localhost');
-      let token = parsedUrl.searchParams.get('token');
-      if (!token && parsedUrl.pathname !== '/api/storage/share') {
+      let rawToken = parsedUrl.searchParams.get('token') || parsedUrl.searchParams.get('id');
+      if (!rawToken && parsedUrl.pathname !== '/api/storage/share') {
         const parts = parsedUrl.pathname.split('/').filter(Boolean);
         // e.g. ['api', 'storage', 'share', 'abc123']
         if (parts.length >= 4) {
-          token = parts[3];
+          rawToken = parts[3];
+        }
+      }
+
+      let token = '';
+      if (rawToken) {
+        try {
+          token = decodeURIComponent(rawToken).trim();
+        } catch {
+          token = rawToken.trim();
         }
       }
 
@@ -598,16 +607,17 @@ export async function handleApiRequest(
         });
       }
 
-      // Supabase server client (uses service role key to query public.share_links for unauthenticated visitors)
+      // Supabase server client (uses service role key to query public.share_links & public.files for unauthenticated visitors)
       const sb = getSupabaseServerClient();
       if (!sb) {
+        console.error('[API /api/storage/share] Database server client is not available.');
         return sendJson(res, 503, {
           success: false,
           error: 'Database connection unavailable.',
         });
       }
 
-      // 1. Find share_links row by token
+      // 1. Find share_links row by token: SELECT * FROM public.share_links WHERE token = '<TOKEN>'
       const { data: shareLink, error: shareErr } = await sb
         .from('share_links')
         .select('*')
@@ -615,10 +625,10 @@ export async function handleApiRequest(
         .maybeSingle();
 
       if (shareErr) {
-        console.error('[API /api/storage/share] Supabase query error:', shareErr);
+        console.error('[API /api/storage/share] Supabase query error fetching share_link:', shareErr);
         return sendJson(res, 500, {
           success: false,
-          error: 'Failed to look up share link.',
+          error: `Database error looking up share link: ${shareErr.message || 'Lookup failed'}`,
         });
       }
 
@@ -626,7 +636,7 @@ export async function handleApiRequest(
         return sendJson(res, 404, {
           success: false,
           notFound: true,
-          error: 'Share link not found.',
+          error: 'File not found.',
         });
       }
 
@@ -642,14 +652,22 @@ export async function handleApiRequest(
         }
       }
 
-      // 3. Fetch associated file from public.files
+      // 3. Fetch associated file: SELECT * FROM public.files WHERE id = '<share_links.file_id>'
       const { data: file, error: fileErr } = await sb
         .from('files')
-        .select('id, user_id, name, extension, mime_type, size_bytes, storage_key, created_at, updated_at')
+        .select('*')
         .eq('id', shareLink.file_id)
         .maybeSingle();
 
-      if (fileErr || !file) {
+      if (fileErr) {
+        console.error('[API /api/storage/share] Supabase query error fetching file:', fileErr);
+        return sendJson(res, 500, {
+          success: false,
+          error: `Database error fetching file: ${fileErr.message || 'Lookup failed'}`,
+        });
+      }
+
+      if (!file) {
         return sendJson(res, 404, {
           success: false,
           notFound: true,
@@ -659,19 +677,21 @@ export async function handleApiRequest(
 
       // 4. Retrieve uploader's display name from profiles table (explicitly do NOT expose email)
       let uploaderName = 'Optic User';
-      try {
-        const { data: profile } = await sb
-          .from('profiles')
-          .select('id, display_name, full_name, name')
-          .eq('id', file.user_id)
-          .maybeSingle();
+      if (file.user_id) {
+        try {
+          const { data: profile } = await sb
+            .from('profiles')
+            .select('id, display_name, full_name, name')
+            .eq('id', file.user_id)
+            .maybeSingle();
 
-        if (profile) {
-          uploaderName =
-            profile.display_name || profile.full_name || profile.name || 'Optic User';
+          if (profile) {
+            uploaderName =
+              profile.display_name || profile.full_name || profile.name || 'Optic User';
+          }
+        } catch (pErr) {
+          console.warn('[API /api/storage/share] Profile query warning:', pErr);
         }
-      } catch (pErr) {
-        console.warn('[API /api/storage/share] Profile query warning:', pErr);
       }
 
       // 5. Generate short-lived presigned GET URLs from R2
@@ -693,6 +713,12 @@ export async function handleApiRequest(
         }
       }
 
+      // Fallback preview/download URL if public_url is present on file row
+      if (!previewUrl && (file as any).public_url) {
+        previewUrl = (file as any).public_url;
+        downloadUrl = (file as any).public_url;
+      }
+
       // If ?download=1 was requested directly, redirect to download URL
       const isDownloadRedirect =
         parsedUrl.searchParams.get('download') === '1' ||
@@ -702,6 +728,10 @@ export async function handleApiRequest(
         res.writeHead(302, { Location: downloadUrl });
         return res.end();
       }
+
+      const safeExtension =
+        (file as any).extension ||
+        (file.name && file.name.includes('.') ? file.name.split('.').pop() || '' : '');
 
       return sendJson(res, 200, {
         success: true,
@@ -713,9 +743,9 @@ export async function handleApiRequest(
         file: {
           id: file.id,
           name: file.name,
-          extension: file.extension || (file.name.includes('.') ? file.name.split('.').pop() : ''),
+          extension: safeExtension,
           mimeType: file.mime_type || 'application/octet-stream',
-          sizeBytes: file.size_bytes || 0,
+          sizeBytes: Number(file.size_bytes) || 0,
           createdAt: file.created_at,
           updatedAt: file.updated_at,
         },

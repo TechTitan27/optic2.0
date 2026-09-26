@@ -14,7 +14,28 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const token = req.query?.token || req.query?.id;
+    let rawToken = req.query?.token || req.query?.id || req.query?.slug;
+    if (!rawToken && req.url) {
+      try {
+        const u = new URL(req.url, 'http://localhost');
+        rawToken = u.searchParams.get('token') || u.searchParams.get('id');
+      } catch {}
+    }
+
+    let token = '';
+    if (typeof rawToken === 'string') {
+      try {
+        token = decodeURIComponent(rawToken).trim();
+      } catch {
+        token = rawToken.trim();
+      }
+    } else if (Array.isArray(rawToken) && rawToken[0]) {
+      try {
+        token = decodeURIComponent(rawToken[0]).trim();
+      } catch {
+        token = String(rawToken[0]).trim();
+      }
+    }
 
     if (!token) {
       return res.status(400).json({
@@ -25,13 +46,14 @@ export default async function handler(req: any, res: any) {
 
     const sb = getSupabaseServerClient();
     if (!sb) {
+      console.error('[API /api/storage/share] Database server client is not available.');
       return res.status(503).json({
         success: false,
         error: 'Database connection unavailable.',
       });
     }
 
-    // 1. Find share_links row by token
+    // 1. Find share_links row by token: SELECT * FROM public.share_links WHERE token = '<TOKEN>'
     const { data: shareLink, error: shareErr } = await sb
       .from('share_links')
       .select('*')
@@ -39,10 +61,10 @@ export default async function handler(req: any, res: any) {
       .maybeSingle();
 
     if (shareErr) {
-      console.error('[API /api/storage/share] Supabase query error:', shareErr);
+      console.error('[API /api/storage/share] Supabase query error fetching share_link:', shareErr);
       return res.status(500).json({
         success: false,
-        error: 'Failed to look up share link.',
+        error: `Database error looking up share link: ${shareErr.message || 'Lookup failed'}`,
       });
     }
 
@@ -50,7 +72,7 @@ export default async function handler(req: any, res: any) {
       return res.status(404).json({
         success: false,
         notFound: true,
-        error: 'Share link not found.',
+        error: 'File not found.',
       });
     }
 
@@ -66,14 +88,22 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // 3. Fetch associated file from public.files
+    // 3. Fetch associated file: SELECT * FROM public.files WHERE id = '<share_links.file_id>'
     const { data: file, error: fileErr } = await sb
       .from('files')
-      .select('id, user_id, name, extension, mime_type, size_bytes, storage_key, created_at, updated_at')
+      .select('*')
       .eq('id', shareLink.file_id)
       .maybeSingle();
 
-    if (fileErr || !file) {
+    if (fileErr) {
+      console.error('[API /api/storage/share] Supabase query error fetching file:', fileErr);
+      return res.status(500).json({
+        success: false,
+        error: `Database error fetching file: ${fileErr.message || 'Lookup failed'}`,
+      });
+    }
+
+    if (!file) {
       return res.status(404).json({
         success: false,
         notFound: true,
@@ -83,19 +113,21 @@ export default async function handler(req: any, res: any) {
 
     // 4. Retrieve uploader's display name from profiles table (explicitly do NOT expose email)
     let uploaderName = 'Optic User';
-    try {
-      const { data: profile } = await sb
-        .from('profiles')
-        .select('id, display_name, full_name, name')
-        .eq('id', file.user_id)
-        .maybeSingle();
+    if (file.user_id) {
+      try {
+        const { data: profile } = await sb
+          .from('profiles')
+          .select('id, display_name, full_name, name')
+          .eq('id', file.user_id)
+          .maybeSingle();
 
-      if (profile) {
-        uploaderName =
-          profile.display_name || profile.full_name || profile.name || 'Optic User';
+        if (profile) {
+          uploaderName =
+            profile.display_name || profile.full_name || profile.name || 'Optic User';
+        }
+      } catch (pErr) {
+        console.warn('[API /api/storage/share] Profile query warning:', pErr);
       }
-    } catch (pErr) {
-      console.warn('[API /api/storage/share] Profile query warning:', pErr);
     }
 
     // 5. Generate short-lived presigned GET URLs from R2
@@ -117,10 +149,20 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    // Fallback preview/download URL if public_url is present on file row
+    if (!previewUrl && (file as any).public_url) {
+      previewUrl = (file as any).public_url;
+      downloadUrl = (file as any).public_url;
+    }
+
     // If ?download=1 was requested, redirect directly to download URL
     if (req.query?.download === '1' && downloadUrl) {
       return res.redirect(302, downloadUrl);
     }
+
+    const safeExtension =
+      (file as any).extension ||
+      (file.name && file.name.includes('.') ? file.name.split('.').pop() || '' : '');
 
     return res.status(200).json({
       success: true,
@@ -132,9 +174,9 @@ export default async function handler(req: any, res: any) {
       file: {
         id: file.id,
         name: file.name,
-        extension: file.extension || (file.name.includes('.') ? file.name.split('.').pop() : ''),
+        extension: safeExtension,
         mimeType: file.mime_type || 'application/octet-stream',
-        sizeBytes: file.size_bytes || 0,
+        sizeBytes: Number(file.size_bytes) || 0,
         createdAt: file.created_at,
         updatedAt: file.updated_at,
       },

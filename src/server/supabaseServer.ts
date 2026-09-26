@@ -1,35 +1,52 @@
+import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
-const SUPABASE_URL =
-  process.env.SUPABASE_URL ||
-  process.env.NEXT_PUBLIC_SUPABASE_URL ||
-  process.env.VITE_SUPABASE_URL ||
-  'https://dsrvkqutqxuvmfhbcuvy.supabase.co';
+export function getSupabaseUrl(): string {
+  return (
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    'https://dsrvkqutqxuvmfhbcuvy.supabase.co'
+  );
+}
 
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SECRET_KEY ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  '';
+export function getSupabaseSecretKey(): string {
+  return (
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_KEY ||
+    ''
+  );
+}
 
-const SUPABASE_ANON_KEY =
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_KEY ||
-  '';
+export function getSupabaseAnonKey(): string {
+  return (
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    ''
+  );
+}
 
 let serverClientInstance: SupabaseClient | null = null;
+let lastServerKey: string = '';
 
 export function getSupabaseServerClient(userToken?: string): SupabaseClient | null {
-  const keyToUse = SUPABASE_SERVICE_ROLE_KEY || userToken || SUPABASE_ANON_KEY;
+  const serviceKey = getSupabaseSecretKey();
+  const anonKey = getSupabaseAnonKey();
+  const keyToUse = serviceKey || userToken || anonKey;
   if (!keyToUse) return null;
 
-  if (userToken && !SUPABASE_SERVICE_ROLE_KEY) {
+  const url = getSupabaseUrl();
+
+  if (userToken && !serviceKey) {
     // Client with user's JWT so RLS is respected when no service role key is provided
-    return createClient(SUPABASE_URL, keyToUse, {
+    return createClient(url, keyToUse, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
@@ -43,13 +60,14 @@ export function getSupabaseServerClient(userToken?: string): SupabaseClient | nu
     });
   }
 
-  if (!serverClientInstance) {
-    serverClientInstance = createClient(SUPABASE_URL, keyToUse, {
+  if (!serverClientInstance || lastServerKey !== keyToUse) {
+    serverClientInstance = createClient(url, keyToUse, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
       },
     });
+    lastServerKey = keyToUse;
   }
   return serverClientInstance;
 }
@@ -60,8 +78,11 @@ export async function verifyUserToken(authHeader?: string): Promise<{ id: string
   if (!token) return null;
 
   try {
-    const keyToUse = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY || token;
-    const sb = createClient(SUPABASE_URL, keyToUse, {
+    const url = getSupabaseUrl();
+    const serviceKey = getSupabaseSecretKey();
+    const anonKey = getSupabaseAnonKey();
+    const keyToUse = serviceKey || anonKey || token;
+    const sb = createClient(url, keyToUse, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
@@ -83,11 +104,14 @@ export async function verifyUserToken(authHeader?: string): Promise<{ id: string
   }
 
   try {
-    const resp = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    const url = getSupabaseUrl();
+    const serviceKey = getSupabaseSecretKey();
+    const anonKey = getSupabaseAnonKey();
+    const resp = await fetch(`${url}/auth/v1/user`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
-        apikey: SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY || token,
+        apikey: serviceKey || anonKey || token,
       },
     });
 

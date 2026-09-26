@@ -168,8 +168,15 @@ export function getSurfaceUrl(surface: SurfaceType, path: string = '/'): string 
  * Extracts a public share token from a URL path, e.g. /s/:token, /share/:token, or /cloud/s/:token
  */
 export function getShareTokenFromPath(pathname: string): string | null {
-  const match = pathname.match(/^\/(?:cloud\/)?(?:s|share)\/([a-zA-Z0-9_-]+)/i);
-  return match ? match[1] : null;
+  if (!pathname) return null;
+  const cleanPath = pathname.split('?')[0].split('#')[0].replace(/\/+$/, '');
+  const match = cleanPath.match(/^\/(?:cloud\/)?(?:s|share)\/([^\s/?#]+)/i);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]).trim();
+  } catch {
+    return match[1].trim();
+  }
 }
 
 /**
@@ -255,13 +262,15 @@ export function resolveSurfaceState(): {
   }
 
   const hostname = window.location.hostname.toLowerCase().trim();
-  const pathname = window.location.pathname.toLowerCase();
+  const rawPathname = window.location.pathname;
+  const pathname = rawPathname.toLowerCase();
   const hash = window.location.hash || '';
   const search = window.location.search || '';
   const productHost = getProductHost(hostname);
 
   // Universal public file share route: /s/:token or /share/:token or /cloud/s/:token
-  const shareToken = getShareTokenFromPath(pathname);
+  // CRITICAL: Extract token from rawPathname to preserve EXACT token case
+  const shareToken = getShareTokenFromPath(rawPathname);
   if (shareToken) {
     if (productHost === 'central') {
       window.location.replace(`https://cloud.optic.doy.best/s/${shareToken}`);
