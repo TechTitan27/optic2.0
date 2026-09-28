@@ -10,6 +10,14 @@
       "destination": "/api/status"
     },
     {
+      "source": "/api/deployments/:action*",
+      "destination": "/api/deployments"
+    },
+    {
+      "source": "/api/hosting/:action*",
+      "destination": "/api/hosting/:action*"
+    },
+    {
       "source": "/api/keys/:action*",
       "destination": "/api/keys/:action*"
     },

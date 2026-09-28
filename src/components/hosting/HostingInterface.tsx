@@ -171,8 +171,19 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
       setDeploymentsList(deps);
       setProjectDomains(doms);
 
-      if (deps.length > 0 && !selectedDeploymentForLogs) {
-        setSelectedDeploymentForLogs(deps[0].id);
+      if (deps.length > 0) {
+        if (!selectedDeploymentForLogs) {
+          setSelectedDeploymentForLogs(deps[0].id);
+        }
+        const readyDep = deps.find((d) => d.status === 'ready');
+        if (readyDep?.deploymentUrl || readyDep?.url) {
+          const liveUrl = readyDep.deploymentUrl || readyDep.url;
+          setSelectedProject((prev) =>
+            prev && prev.id === selectedProject.id
+              ? { ...prev, productionDomain: liveUrl, latestDeployment: deps[0] }
+              : prev
+          );
+        }
       }
     } catch (err) {
       console.warn('Error loading project details:', err);
@@ -363,7 +374,13 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
         : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
     const storagePath = `deployments/${currentOrg.id}/${selectedProject.id}/${deploymentId}`;
-    const deploymentUrl = selectedProject.productionDomain || `https://${selectedProject.slug}.optic.doy.best`;
+    const hostOrigin =
+      typeof window !== 'undefined'
+        ? window.location.host.includes('optic.doy.best')
+          ? 'https://hosting.optic.doy.best'
+          : window.location.origin
+        : 'https://hosting.optic.doy.best';
+    const deploymentUrl = `${hostOrigin}/api/deployments/${deploymentId}/`;
 
     const addLocalLog = (message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') => {
       const newLog: DeploymentLog = {
@@ -436,6 +453,28 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
       const completedAt = new Date().toISOString();
       await supabaseData.updateDeploymentStatus(deploymentId, 'ready', completedAt);
       addLocalLog('Deployment ready', 'success');
+
+      setSelectedProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              productionDomain: deploymentUrl,
+              status: 'ready',
+              latestDeployment: {
+                id: deploymentId,
+                projectId: prev.id,
+                organizationId: currentOrg.id,
+                userId: user.id,
+                status: 'ready',
+                url: deploymentUrl,
+                deploymentUrl,
+                storagePath,
+                createdAt: new Date().toISOString(),
+                completedAt,
+              },
+            }
+          : null
+      );
 
       // Refresh project and deployments
       await loadProjectDetails();

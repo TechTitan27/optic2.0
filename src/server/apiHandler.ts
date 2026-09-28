@@ -15,6 +15,7 @@ import {
   createDeploymentPresignedUploadUrl,
   createSharePresignedUrls,
 } from './r2Storage.js';
+import { handleDeploymentRequest } from './deploymentServer.js';
 
 interface WaitlistEntry {
   email: string;
@@ -86,6 +87,11 @@ export async function handleApiRequest(
   }
 
   const method = req.method || 'GET';
+
+  // 0. GET/HEAD /api/deployments/:deploymentId/* (REAL PUBLIC STATIC FILE SERVER)
+  if (url.startsWith('/api/deployments')) {
+    return handleDeploymentRequest(req, res);
+  }
 
   // 1. POST /api/waitlist
   if (url === '/api/waitlist' && method === 'POST') {
@@ -415,16 +421,29 @@ export async function handleApiRequest(
             query = query.eq('organization_id', orgId);
           }
 
-          const { data, error } = await query;
+          let { data, error } = await query;
           if (error) {
-            console.error('[API /api/hosting/deployments] Supabase query error:', error);
-          } else if (data) {
+            console.warn('[API /api/hosting/deployments] Warning from deployments table, trying hosting_deployments:', error.message);
+            let hQuery = sb.from('hosting_deployments').select('*').order('created_at', { ascending: false });
+            if (projectId) {
+              hQuery = hQuery.eq('project_id', projectId);
+            }
+            if (orgId) {
+              hQuery = hQuery.eq('organization_id', orgId);
+            }
+            const hRes = await hQuery;
+            data = hRes.data;
+          }
+
+          if (data) {
             const mapped = data.map((d: any) => ({
               id: d.id,
               projectId: d.project_id,
               projectName: d.project_name || 'project',
               status: d.status || 'ready',
-              url: d.url,
+              url: d.deployment_url || d.url || '',
+              deploymentUrl: d.deployment_url || d.url || '',
+              storagePath: d.storage_path,
               commitHash: d.commit_hash || 'HEAD',
               commitMessage: d.commit_message || 'Deployment update',
               creator: d.creator || 'developer',
@@ -432,6 +451,7 @@ export async function handleApiRequest(
               durationSeconds: d.duration_seconds || 12,
               environment: d.environment || 'production',
               createdAt: d.created_at,
+              completedAt: d.completed_at,
             }));
             return sendJson(res, 200, { success: true, deployments: mapped });
           }
@@ -530,15 +550,23 @@ export async function handleApiRequest(
 
       if (sb && orgId) {
         try {
-          const { data, error } = await sb
+          let { data, error } = await sb
             .from('projects')
             .select('*')
             .eq('organization_id', orgId)
             .order('created_at', { ascending: false });
 
           if (error) {
-            console.error('[API /api/hosting/projects] Supabase query error:', error);
-          } else if (data) {
+            console.warn('[API /api/hosting/projects] Warning querying projects, trying hosting_projects:', error.message);
+            const hpRes = await sb
+              .from('hosting_projects')
+              .select('*')
+              .eq('organization_id', orgId)
+              .order('created_at', { ascending: false });
+            data = hpRes.data;
+          }
+
+          if (data) {
             return sendJson(res, 200, { success: true, projects: data });
           }
         } catch (dbErr) {

@@ -708,25 +708,49 @@ export const supabaseData = {
 
     console.log('[Supabase] Querying public.projects for organization:', orgId);
 
-    const { data: projectsData, error: projErr } = await sb
+    let projectsData: any[] = [];
+    const { data: pData, error: projErr } = await sb
       .from('projects')
       .select('*')
       .eq('organization_id', orgId)
       .order('created_at', { ascending: false });
 
     if (projErr) {
-      console.error('[Supabase] Error querying public.projects:', projErr);
-      throw projErr;
+      console.warn('[Supabase] Warning querying public.projects, trying hosting_projects:', projErr.message);
+      const { data: hpData, error: hpErr } = await sb
+        .from('hosting_projects')
+        .select('*')
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false });
+      if (hpErr) {
+        console.error('[Supabase] Error querying hosting_projects:', hpErr);
+        throw hpErr;
+      }
+      projectsData = hpData || [];
+    } else {
+      projectsData = pData || [];
     }
 
     // Also fetch latest deployment for each project to show live status & times
     let deploymentsByProject: Record<string, DeploymentItem> = {};
     try {
-      const { data: depsData } = await sb
+      let depsData: any[] = [];
+      const { data: dData, error: dErr } = await sb
         .from('deployments')
         .select('*')
         .eq('organization_id', orgId)
         .order('created_at', { ascending: false });
+
+      if (dErr) {
+        const { data: hdData } = await sb
+          .from('hosting_deployments')
+          .select('*')
+          .eq('organization_id', orgId)
+          .order('created_at', { ascending: false });
+        depsData = hdData || [];
+      } else {
+        depsData = dData || [];
+      }
 
       if (depsData) {
         for (const d of depsData) {
@@ -739,7 +763,7 @@ export const supabaseData = {
               projectName: d.project_name || '',
               status: d.status || 'ready',
               url: d.deployment_url || d.url || '',
-              deploymentUrl: d.deployment_url || d.url,
+              deploymentUrl: d.deployment_url || d.url || '',
               storagePath: d.storage_path,
               commitHash: d.commit_hash || 'HEAD',
               commitMessage: d.commit_message,
@@ -759,7 +783,11 @@ export const supabaseData = {
 
     return (projectsData || []).map((p: any) => {
       const latestDep = deploymentsByProject[p.id];
-      const prodDomain = p.production_domain || `https://${p.slug}.optic.doy.best`;
+      const prodDomain =
+        latestDep?.deploymentUrl ||
+        latestDep?.url ||
+        p.production_domain ||
+        (latestDep?.id ? `/api/deployments/${latestDep.id}/` : `https://${p.slug}.optic.doy.best`);
       return {
         id: p.id,
         organization_id: p.organization_id || orgId,
@@ -834,6 +862,7 @@ export const supabaseData = {
       projectInsertPayload.description = input.description.trim();
     }
 
+    let projectData = null;
     const { data, error } = await sb
       .from('projects')
       .insert(projectInsertPayload)
@@ -841,25 +870,37 @@ export const supabaseData = {
       .single();
 
     if (error) {
-      console.error('[Supabase] Error inserting project into public.projects:', error);
-      throw error;
+      console.warn('[Supabase] Warning inserting into public.projects, trying hosting_projects:', error.message);
+      const { data: hpData, error: hpErr } = await sb
+        .from('hosting_projects')
+        .insert(projectInsertPayload)
+        .select()
+        .single();
+
+      if (hpErr) {
+        console.error('[Supabase] Error inserting project into hosting_projects:', hpErr);
+        throw hpErr;
+      }
+      projectData = hpData;
+    } else {
+      projectData = data;
     }
 
     const newProject: HostingProject = {
-      id: data.id,
-      organization_id: data.organization_id || orgId,
-      name: data.name,
-      slug: data.slug,
-      description: data.description,
-      framework: data.framework,
-      productionDomain: data.production_domain || productionDomain,
-      assignedSubdomain: data.assigned_subdomain || subdomain,
-      customDomains: data.custom_domains || [],
-      gitRepo: data.git_repo || undefined,
-      gitBranch: data.git_branch || 'main',
-      status: data.status || 'ready',
-      createdAt: data.created_at,
-      updatedAt: data.updated_at,
+      id: projectData.id,
+      organization_id: projectData.organization_id || orgId,
+      name: projectData.name,
+      slug: projectData.slug,
+      description: projectData.description,
+      framework: projectData.framework,
+      productionDomain: projectData.production_domain || productionDomain,
+      assignedSubdomain: projectData.assigned_subdomain || subdomain,
+      customDomains: projectData.custom_domains || [],
+      gitRepo: projectData.git_repo || undefined,
+      gitBranch: projectData.git_branch || 'main',
+      status: projectData.status || 'ready',
+      createdAt: projectData.created_at,
+      updatedAt: projectData.updated_at,
     };
 
     return newProject;
@@ -907,11 +948,23 @@ export const supabaseData = {
       query = query.eq('organization_id', orgId);
     }
 
-    const { data, error } = await query.order('created_at', { ascending: false });
+    let { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) {
-      console.error('[Supabase] Error querying public.deployments:', error);
-      throw error;
+      console.warn('[Supabase] Warning querying public.deployments, trying hosting_deployments:', error.message);
+      let hQuery = sb
+        .from('hosting_deployments')
+        .select('*')
+        .eq('project_id', projectId);
+      if (orgId) {
+        hQuery = hQuery.eq('organization_id', orgId);
+      }
+      const hRes = await hQuery.order('created_at', { ascending: false });
+      if (hRes.error) {
+        console.error('[Supabase] Error querying hosting_deployments:', hRes.error);
+        throw hRes.error;
+      }
+      data = hRes.data;
     }
 
     return (data || []).map((d: any) => ({
@@ -1004,10 +1057,27 @@ export const supabaseData = {
         .single();
 
       if (retryRes.error) {
-        console.error('[Supabase] Failed to insert deployment record:', retryRes.error);
-        throw retryRes.error;
+        console.warn('[Supabase] Trying fallback insert to hosting_deployments:', retryRes.error.message);
+        const hdPayload = {
+          project_id: params.projectId,
+          organization_id: params.organizationId,
+          status: params.status,
+          url: params.deploymentUrl,
+        };
+        const hdRes = await sb
+          .from('hosting_deployments')
+          .insert(hdPayload)
+          .select()
+          .single();
+
+        if (hdRes.error) {
+          console.error('[Supabase] Failed to insert deployment record:', hdRes.error);
+          throw hdRes.error;
+        }
+        data = hdRes.data;
+      } else {
+        data = retryRes.data;
       }
-      data = retryRes.data;
     }
 
     return {
@@ -1052,7 +1122,11 @@ export const supabaseData = {
         .eq('id', deploymentId);
 
       if (error) {
-        console.warn('[Supabase] Error updating deployment status:', error.message);
+        console.warn('[Supabase] Error updating deployment status, trying hosting_deployments:', error.message);
+        await sb
+          .from('hosting_deployments')
+          .update(updatePayload)
+          .eq('id', deploymentId);
       }
     } catch (err) {
       console.warn('[Supabase] Exception updating deployment status:', err);
