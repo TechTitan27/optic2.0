@@ -589,16 +589,38 @@ export async function handleApiRequest(
 
       if (sb && userId) {
         try {
-          const { data, error } = await sb
+          const orgMap = new Map<string, any>();
+
+          // Query organizations where user is a member
+          const { data: memberData, error: memErr } = await sb
             .from('organizations')
             .select('*, organization_members!inner(user_id, role)')
             .eq('organization_members.user_id', userId);
 
-          if (error) {
-            console.error('[API /api/organizations] Supabase query error:', error);
-          } else if (data) {
-            return sendJson(res, 200, { success: true, organizations: data });
+          if (!memErr && memberData) {
+            for (const item of memberData) {
+              orgMap.set(item.id, item);
+            }
           }
+
+          // Also query organizations created by the user directly
+          const { data: createdData, error: createErr } = await sb
+            .from('organizations')
+            .select('*')
+            .eq('created_by', userId);
+
+          if (!createErr && createdData) {
+            for (const item of createdData) {
+              if (!orgMap.has(item.id)) {
+                orgMap.set(item.id, {
+                  ...item,
+                  organization_members: [{ user_id: userId, role: 'owner' }],
+                });
+              }
+            }
+          }
+
+          return sendJson(res, 200, { success: true, organizations: Array.from(orgMap.values()) });
         } catch (dbErr) {
           console.error('[API /api/organizations] Supabase exception:', dbErr);
         }

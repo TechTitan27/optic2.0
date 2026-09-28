@@ -579,57 +579,136 @@ export const supabaseData = {
   /**
    * Get all organizations that the user belongs to from `public.organizations`
    */
-  async getUserOrganizations(userId: string): Promise<Organization[]> {
+  async getUserOrganizations(userId?: string): Promise<Organization[]> {
     const sb = getSupabase();
-    if (!sb || !userId) return [];
-
-    console.log('[Supabase] Querying organizations for user:', userId);
+    if (!sb) return [];
 
     try {
-      // 1. Fetch organization memberships for this user
-      const { data: memberRows, error: memberErr } = await sb
-        .from('organization_members')
-        .select('organization_id, role, organizations (*)')
-        .eq('user_id', userId);
+      // 1. Resolve currently authenticated Supabase user
+      const { data: authData } = await sb.auth.getUser();
+      const verifiedUserId = authData?.user?.id || userId;
+      if (!verifiedUserId) return [];
 
-      if (memberErr) {
-        console.error('[Supabase] Error querying public.organization_members:', memberErr);
+      console.log('[Supabase] Querying organizations for verified user:', verifiedUserId);
+
+      const orgMap = new Map<string, Organization>();
+      const memberOrgIds: string[] = [];
+
+      // 2. Fetch memberships from public.organization_members
+      try {
+        const { data: memberRows, error: memberErr } = await sb
+          .from('organization_members')
+          .select('organization_id, role, organizations (*)')
+          .eq('user_id', verifiedUserId);
+
+        if (memberErr) {
+          console.warn('[Supabase] Note on public.organization_members lookup:', memberErr.message);
+        } else if (memberRows && Array.isArray(memberRows)) {
+          for (const m of memberRows) {
+            if (m.organization_id) {
+              memberOrgIds.push(m.organization_id);
+            }
+            // In postgrest, embedded relation can be an object or an array
+            const org = Array.isArray(m.organizations) ? m.organizations[0] : m.organizations;
+            if (org && org.id) {
+              orgMap.set(org.id, {
+                id: org.id,
+                name: org.name,
+                slug: org.slug,
+                created_by: org.created_by,
+                created_at: org.created_at,
+                avatarUrl: getDiceBearOrgAvatarUrl(org.id),
+                role: m.role || 'member',
+              });
+            }
+          }
+        }
+      } catch (memLookupEx) {
+        console.warn('[Supabase] Exception querying organization_members:', memLookupEx);
       }
 
-      if (!memberErr && memberRows && memberRows.length > 0) {
-        return memberRows
-          .filter((m: any) => m.organizations)
-          .map((m: any) => ({
-            id: m.organizations.id,
-            name: m.organizations.name,
-            slug: m.organizations.slug,
-            created_by: m.organizations.created_by,
-            created_at: m.organizations.created_at,
-            avatarUrl: getDiceBearOrgAvatarUrl(m.organizations.id),
-            role: m.role || 'member',
-          }));
+      // 3. If membership rows existed but embedded organizations was omitted, query them by id
+      if (memberOrgIds.length > 0 && orgMap.size < memberOrgIds.length) {
+        const missingIds = memberOrgIds.filter((id) => !orgMap.has(id));
+        if (missingIds.length > 0) {
+          try {
+            const { data: fetchedOrgs, error: fetchErr } = await sb
+              .from('organizations')
+              .select('*')
+              .in('id', missingIds);
+
+            if (!fetchErr && fetchedOrgs) {
+              for (const o of fetchedOrgs) {
+                orgMap.set(o.id, {
+                  id: o.id,
+                  name: o.name,
+                  slug: o.slug,
+                  created_by: o.created_by,
+                  created_at: o.created_at,
+                  avatarUrl: getDiceBearOrgAvatarUrl(o.id),
+                  role: 'member',
+                });
+              }
+            }
+          } catch (e) {
+            console.warn('[Supabase] Exception fetching orgs by id list:', e);
+          }
+        }
       }
 
-      // Query organizations created by user directly
-      const { data: directOrgs, error: orgErr } = await sb
-        .from('organizations')
-        .select('*')
-        .eq('created_by', userId);
+      // 4. Also query organizations created by the user directly to guarantee all user orgs are visible
+      try {
+        const { data: directOrgs, error: orgErr } = await sb
+          .from('organizations')
+          .select('*')
+          .eq('created_by', verifiedUserId);
 
-      if (orgErr) {
-        console.error('[Supabase] Error querying direct public.organizations:', orgErr);
-        throw orgErr;
+        if (orgErr) {
+          console.warn('[Supabase] Note on direct organizations lookup:', orgErr.message);
+        } else if (directOrgs && Array.isArray(directOrgs)) {
+          for (const o of directOrgs) {
+            if (!orgMap.has(o.id)) {
+              orgMap.set(o.id, {
+                id: o.id,
+                name: o.name,
+                slug: o.slug,
+                created_by: o.created_by,
+                created_at: o.created_at,
+                avatarUrl: getDiceBearOrgAvatarUrl(o.id),
+                role: 'owner',
+              });
+
+              // Self-heal: ensure creator is recorded in organization_members
+              sb.from('organization_members')
+                .insert({
+                  organization_id: o.id,
+                  user_id: verifiedUserId,
+                  role: 'owner',
+                })
+                .then(({ error }: any) => {
+                  if (error && error.code !== '23505') {
+                    console.warn('[Supabase] Note on self-healing organization membership:', error.message);
+                  }
+                });
+            } else {
+              // If already found and created_by matches, ensure role is owner
+              const existing = orgMap.get(o.id);
+              if (existing && existing.created_by === verifiedUserId) {
+                existing.role = 'owner';
+              }
+            }
+          }
+        }
+      } catch (directLookupEx) {
+        console.warn('[Supabase] Exception querying direct organizations:', directLookupEx);
       }
 
-      return (directOrgs || []).map((o: any) => ({
-        id: o.id,
-        name: o.name,
-        slug: o.slug,
-        created_by: o.created_by,
-        created_at: o.created_at,
-        avatarUrl: getDiceBearOrgAvatarUrl(o.id),
-        role: 'owner',
-      }));
+      const results = Array.from(orgMap.values()).sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+
+      console.log('[Supabase] Loaded organizations count for user:', results.length);
+      return results;
     } catch (err) {
       console.error('[Supabase] Error in getUserOrganizations:', err);
       throw err;
@@ -639,62 +718,86 @@ export const supabaseData = {
   /**
    * Create a new organization in `public.organizations` and member in `public.organization_members`
    */
-  async createOrganization(userId: string, name: string, customSlug?: string): Promise<Organization> {
+  async createOrganization(_userIdParam?: string, name?: string, customSlug?: string): Promise<Organization> {
     const sb = getSupabase();
     if (!sb) {
       console.error('[Supabase] Supabase client is not available in createOrganization.');
       throw new Error('Supabase client is not available.');
     }
 
-    const cleanName = name.trim();
+    // 1. Resolve and verify the currently authenticated Supabase user
+    // CRITICAL: Always use authenticated user from sb.auth.getUser() to satisfy RLS: created_by = (select auth.uid())
+    const { data: authData, error: authErr } = await sb.auth.getUser();
+    const verifiedUser = authData?.user;
+    if (authErr || !verifiedUser?.id) {
+      console.error('[Supabase] Auth session error in createOrganization:', authErr);
+      throw new Error('You must be signed in with an active account to create an organization.');
+    }
+    const verifiedUserId = verifiedUser.id;
+
+    const cleanName = (name || '').trim();
+    if (!cleanName) {
+      throw new Error('Organization name is required.');
+    }
+
     const baseSlug = (customSlug || cleanName)
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '') || 'org';
     const slug = `${baseSlug}-${Math.random().toString(36).substring(2, 6)}`;
+    const orgId = crypto.randomUUID();
 
     console.log('[Supabase] Creating organization in public.organizations:', {
+      id: orgId,
       name: cleanName,
       slug,
-      created_by: userId,
+      created_by: verifiedUserId,
     });
 
-    const { data: orgData, error: orgErr } = await sb
+    // Step 1: organizations INSERT
+    const orgPayload = {
+      id: orgId,
+      name: cleanName,
+      slug,
+      created_by: verifiedUserId,
+    };
+
+    const { data: insertedOrg, error: orgErr } = await sb
       .from('organizations')
-      .insert({
-        name: cleanName,
-        slug,
-        created_by: userId,
-      })
+      .insert(orgPayload)
       .select()
-      .single();
+      .maybeSingle();
 
     if (orgErr) {
       console.error('[Supabase] Error inserting organization into public.organizations:', orgErr);
       throw orgErr;
     }
 
-    // Add creator as owner in organization_members
-    try {
-      const { error: memErr } = await sb.from('organization_members').insert({
-        organization_id: orgData.id,
-        user_id: userId,
-        role: 'owner',
-      });
-      if (memErr) {
-        console.warn('[Supabase] Membership insert warning:', memErr);
+    const finalOrg = insertedOrg || orgPayload;
+
+    // Step 2: organization_members INSERT
+    // Creator automatically becomes role = 'owner'
+    const { error: memErr } = await sb.from('organization_members').insert({
+      organization_id: finalOrg.id,
+      user_id: verifiedUserId,
+      role: 'owner',
+    });
+
+    if (memErr) {
+      // Ignore 23505 (unique violation) in case a DB trigger already created the membership record
+      if (memErr.code !== '23505') {
+        console.error('[Supabase] Error inserting owner into public.organization_members:', memErr);
+        throw new Error(`Failed to assign organization membership: ${memErr.message}`);
       }
-    } catch (memEx) {
-      console.warn('[Supabase] Membership insert exception:', memEx);
     }
 
     return {
-      id: orgData.id,
-      name: orgData.name,
-      slug: orgData.slug,
-      created_by: orgData.created_by,
-      created_at: orgData.created_at,
-      avatarUrl: getDiceBearOrgAvatarUrl(orgData.id),
+      id: finalOrg.id,
+      name: finalOrg.name,
+      slug: finalOrg.slug,
+      created_by: finalOrg.created_by,
+      created_at: finalOrg.created_at || new Date().toISOString(),
+      avatarUrl: getDiceBearOrgAvatarUrl(finalOrg.id),
       role: 'owner',
     };
   },
@@ -795,6 +898,13 @@ export const supabaseData = {
         slug: p.slug,
         description: p.description || undefined,
         framework: p.framework || 'react',
+        buildCommand: p.build_command || p.buildConfig?.buildCommand || undefined,
+        outputDirectory: p.output_directory || p.buildConfig?.outputDirectory || undefined,
+        packageManager: p.package_manager || p.buildConfig?.packageManager || undefined,
+        nodeVersion: p.node_version || p.buildConfig?.nodeVersion || undefined,
+        installCommand: p.install_command || p.buildConfig?.installCommand || undefined,
+        rootDirectory: p.root_directory || p.buildConfig?.rootDirectory || undefined,
+        buildConfig: p.build_config || undefined,
         productionDomain: prodDomain,
         assignedSubdomain: p.assigned_subdomain || `${p.slug}.optic.doy.best`,
         customDomains: p.custom_domains || [],
@@ -817,10 +927,17 @@ export const supabaseData = {
       name: string;
       slug?: string;
       description?: string;
-      framework?: 'static' | 'react' | 'vite' | 'nextjs' | 'astro' | 'html';
+      framework?: string;
       gitRepo?: string;
       gitBranch?: string;
       creatorName?: string;
+      buildCommand?: string;
+      outputDirectory?: string;
+      packageManager?: string;
+      nodeVersion?: string;
+      installCommand?: string;
+      rootDirectory?: string;
+      buildConfig?: any;
     }
   ): Promise<HostingProject> {
     const sb = getSupabase();
@@ -843,6 +960,9 @@ export const supabaseData = {
       name: cleanName,
       slug,
       framework: input.framework || 'static',
+      buildCommand: input.buildCommand,
+      outputDirectory: input.outputDirectory,
+      packageManager: input.packageManager,
     });
 
     const projectInsertPayload: any = {
@@ -858,24 +978,77 @@ export const supabaseData = {
       status: 'ready',
     };
 
+    if (input.buildCommand) projectInsertPayload.build_command = input.buildCommand;
+    if (input.outputDirectory) projectInsertPayload.output_directory = input.outputDirectory;
+    if (input.packageManager) projectInsertPayload.package_manager = input.packageManager;
+    if (input.nodeVersion) projectInsertPayload.node_version = input.nodeVersion;
+    if (input.installCommand) projectInsertPayload.install_command = input.installCommand;
+    if (input.rootDirectory) projectInsertPayload.root_directory = input.rootDirectory;
+    if (input.buildConfig) projectInsertPayload.build_config = input.buildConfig;
+
     if (input.description) {
       projectInsertPayload.description = input.description.trim();
     }
 
     let projectData = null;
-    const { data, error } = await sb
+    let { data, error } = await sb
       .from('projects')
       .insert(projectInsertPayload)
       .select()
       .single();
 
     if (error) {
+      // If error might be due to optional columns not yet migrated, try stripped payload
+      if (error.message?.includes('column') || error.message?.includes('does not exist')) {
+        const strippedPayload = {
+          organization_id: orgId,
+          name: cleanName,
+          slug,
+          framework: input.framework || 'static',
+          production_domain: productionDomain,
+          assigned_subdomain: subdomain,
+          custom_domains: [],
+          git_repo: input.gitRepo || null,
+          git_branch: input.gitBranch || 'main',
+          status: 'ready',
+          description: input.description?.trim() || undefined,
+        };
+        const strippedRes = await sb.from('projects').insert(strippedPayload).select().single();
+        if (!strippedRes.error) {
+          data = strippedRes.data;
+          error = null;
+        }
+      }
+    }
+
+    if (error) {
       console.warn('[Supabase] Warning inserting into public.projects, trying hosting_projects:', error.message);
-      const { data: hpData, error: hpErr } = await sb
+      let { data: hpData, error: hpErr } = await sb
         .from('hosting_projects')
         .insert(projectInsertPayload)
         .select()
         .single();
+
+      if (hpErr && (hpErr.message?.includes('column') || hpErr.message?.includes('does not exist'))) {
+        const strippedHpPayload = {
+          organization_id: orgId,
+          name: cleanName,
+          slug,
+          framework: input.framework || 'static',
+          production_domain: productionDomain,
+          assigned_subdomain: subdomain,
+          custom_domains: [],
+          git_repo: input.gitRepo || null,
+          git_branch: input.gitBranch || 'main',
+          status: 'ready',
+          description: input.description?.trim() || undefined,
+        };
+        const strippedHpRes = await sb.from('hosting_projects').insert(strippedHpPayload).select().single();
+        if (!strippedHpRes.error) {
+          hpData = strippedHpRes.data;
+          hpErr = null;
+        }
+      }
 
       if (hpErr) {
         console.error('[Supabase] Error inserting project into hosting_projects:', hpErr);
@@ -893,6 +1066,13 @@ export const supabaseData = {
       slug: projectData.slug,
       description: projectData.description,
       framework: projectData.framework,
+      buildCommand: projectData.build_command || input.buildCommand,
+      outputDirectory: projectData.output_directory || input.outputDirectory,
+      packageManager: projectData.package_manager || input.packageManager,
+      nodeVersion: projectData.node_version || input.nodeVersion,
+      installCommand: projectData.install_command || input.installCommand,
+      rootDirectory: projectData.root_directory || input.rootDirectory,
+      buildConfig: projectData.build_config || input.buildConfig,
       productionDomain: projectData.production_domain || productionDomain,
       assignedSubdomain: projectData.assigned_subdomain || subdomain,
       customDomains: projectData.custom_domains || [],
@@ -925,8 +1105,16 @@ export const supabaseData = {
       .eq('organization_id', orgId);
 
     if (error) {
-      console.error('[Supabase] Error deleting project from public.projects:', error);
-      throw error;
+      console.warn('[Supabase] Note deleting from public.projects, trying hosting_projects:', error.message);
+      const { error: hpErr } = await sb
+        .from('hosting_projects')
+        .delete()
+        .eq('id', projectId)
+        .eq('organization_id', orgId);
+      if (hpErr) {
+        console.error('[Supabase] Error deleting project from hosting_projects:', hpErr);
+        throw hpErr;
+      }
     }
   },
 
@@ -1002,6 +1190,10 @@ export const supabaseData = {
     commitMessage?: string;
     creator?: string;
     branch?: string;
+    framework?: string;
+    buildCommand?: string;
+    outputDirectory?: string;
+    packageManager?: string;
   }): Promise<DeploymentItem> {
     const sb = getSupabase();
     if (!sb) {
@@ -1015,6 +1207,7 @@ export const supabaseData = {
       project_id: params.projectId,
       organization_id: params.organizationId,
       status: params.status,
+      framework: params.framework,
     });
 
     const payload: any = {
@@ -1031,6 +1224,11 @@ export const supabaseData = {
       branch: params.branch || 'main',
       environment: 'production',
     };
+
+    if (params.framework) payload.framework = params.framework;
+    if (params.buildCommand) payload.build_command = params.buildCommand;
+    if (params.outputDirectory) payload.output_directory = params.outputDirectory;
+    if (params.packageManager) payload.package_manager = params.packageManager;
 
     let { data, error } = await sb
       .from('deployments')
@@ -1092,6 +1290,10 @@ export const supabaseData = {
       commitMessage: data.commit_message || params.commitMessage,
       creator: data.creator || params.creator,
       branch: data.branch || params.branch || 'main',
+      framework: data.framework || params.framework,
+      buildCommand: data.build_command || params.buildCommand,
+      outputDirectory: data.output_directory || params.outputDirectory,
+      packageManager: data.package_manager || params.packageManager,
       createdAt: data.created_at,
       completedAt: data.completed_at,
     };

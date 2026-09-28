@@ -69,9 +69,8 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   const createOrg = async (name: string, customSlug?: string): Promise<Organization> => {
-    if (!user?.id) throw new Error('User must be authenticated to create an organization.');
-    const newOrg = await supabaseData.createOrganization(user.id, name, customSlug);
-    setOrganizations((prev) => [newOrg, ...prev]);
+    const newOrg = await supabaseData.createOrganization(user?.id, name, customSlug);
+    setOrganizations((prev) => [newOrg, ...prev.filter((o) => o.id !== newOrg.id)]);
     setCurrentOrg(newOrg);
     notifyToast({
       type: 'success',

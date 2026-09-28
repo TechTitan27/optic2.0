@@ -13,6 +13,7 @@ import { useToast } from '../../context/ToastContext';
 import { supabaseData } from '../../lib/supabaseData';
 import { storageService } from '../../lib/storageService';
 import { getUserAvatarUrl, getOrgAvatarUrl, getDiceBearOrgAvatarUrl } from '../../lib/avatar';
+import { CreateProjectFlowModal } from './CreateProjectFlowModal';
 import {
   Server,
   Plus,
@@ -62,7 +63,29 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
   const [selectedProject, setSelectedProject] = useState<HostingProject | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'logs' | 'domains' | 'settings'>('overview');
 
-  // New Project modal state
+  // Redesigned Developer Flow: Import or Deploy Modal
+  const [createFlowModalOpen, setCreateFlowModalOpen] = useState(false);
+  const [flowExistingProject, setFlowExistingProject] = useState<HostingProject | null>(null);
+
+  const handleOpenDeployFlow = (targetProject: HostingProject | null = null) => {
+    setFlowExistingProject(targetProject);
+    setCreateFlowModalOpen(true);
+  };
+
+  const handleProjectDeployedFromFlow = async (project: HostingProject) => {
+    setProjects((prev) => {
+      const exists = prev.some((p) => p.id === project.id);
+      if (exists) {
+        return prev.map((p) => (p.id === project.id ? project : p));
+      }
+      return [project, ...prev];
+    });
+    setSelectedProject(project);
+    await fetchProjects();
+    await loadProjectDetails();
+  };
+
+  // Legacy New Project modal state
   const [createProjectModalOpen, setCreateProjectModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectSlug, setNewProjectSlug] = useState('');
@@ -721,11 +744,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
               <Button
                 size="sm"
                 variant="primary"
-                onClick={() => {
-                  setSelectedFiles([]);
-                  setDeployError(null);
-                  setDeployModalOpen(true);
-                }}
+                onClick={() => handleOpenDeployFlow(selectedProject)}
                 icon={<Upload size={14} />}
               >
                 New Deployment
@@ -1150,14 +1169,16 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
               </div>
             </div>
 
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => setCreateProjectModalOpen(true)}
-              icon={<Plus size={14} />}
-            >
-              New Project
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => handleOpenDeployFlow(null)}
+                icon={<Plus size={14} />}
+              >
+                Add New
+              </Button>
+            </div>
           </div>
 
           {/* Projects Grid */}
@@ -1171,16 +1192,16 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
               <div className="space-y-1">
                 <h3 className="text-sm font-semibold text-zinc-200">No hosting projects yet</h3>
                 <p className="text-xs text-zinc-400 max-w-sm mx-auto">
-                  Create your first frontend project under <span className="text-zinc-300 font-medium">{currentOrg?.name}</span> to deploy to Optic's Edge network.
+                  Import from Git, upload a project folder, or deploy from Optic Cloud under <span className="text-zinc-300 font-medium">{currentOrg?.name}</span>.
                 </p>
               </div>
               <Button
                 size="sm"
                 variant="primary"
-                onClick={() => setCreateProjectModalOpen(true)}
+                onClick={() => handleOpenDeployFlow(null)}
                 icon={<Plus size={14} />}
               >
-                Create Project
+                Add New Project
               </Button>
             </div>
           ) : (
@@ -1212,6 +1233,10 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
                     </div>
 
                     <div className="space-y-1.5 text-xs text-zinc-400 font-mono mt-4">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-zinc-500">FRAMEWORK:</span>
+                        <span className="text-indigo-400 font-medium capitalize">{proj.framework || 'vite'}</span>
+                      </div>
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="text-zinc-500">SLUG:</span>
                         <span className="text-zinc-300">{proj.slug}</span>
@@ -1509,6 +1534,14 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
           )}
         </div>
       </Modal>
+
+      {/* MODAL 3: Redesigned Developer Flow: Import or Deploy */}
+      <CreateProjectFlowModal
+        isOpen={createFlowModalOpen}
+        onClose={() => setCreateFlowModalOpen(false)}
+        onProjectCreated={handleProjectDeployedFromFlow}
+        existingProject={flowExistingProject}
+      />
     </div>
   );
 };

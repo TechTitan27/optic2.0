@@ -109,18 +109,37 @@ export interface OrganizationMember {
   user?: UserProfile;
 }
 
+export interface ProjectBuildConfig {
+  framework: string;
+  packageManager: string;
+  buildCommand: string;
+  outputDirectory: string;
+  installCommand?: string;
+  nodeVersion?: string;
+  rootDirectory?: string;
+  isStaticOnly?: boolean;
+  envVars?: Record<string, string>;
+}
+
 export interface HostingProject {
   id: string;
   organization_id: string;
   name: string;
   slug: string;
   description?: string;
-  framework: 'static' | 'react' | 'vite' | 'nextjs' | 'astro' | 'html';
+  framework: string;
   productionDomain: string;
   assignedSubdomain: string;
   customDomains: string[];
   gitRepo?: string;
   gitBranch?: string;
+  buildCommand?: string;
+  outputDirectory?: string;
+  packageManager?: string;
+  nodeVersion?: string;
+  installCommand?: string;
+  rootDirectory?: string;
+  buildConfig?: ProjectBuildConfig;
   status: 'ready' | 'building' | 'failed' | 'queued' | 'pending';
   latestDeployment?: DeploymentItem;
   createdAt: string;
@@ -141,6 +160,10 @@ export interface DeploymentItem {
   commitMessage?: string;
   creator?: string;
   branch?: string;
+  framework?: string;
+  buildCommand?: string;
+  outputDirectory?: string;
+  packageManager?: string;
   durationSeconds?: number;
   environment?: 'production' | 'preview';
   createdAt: string;
