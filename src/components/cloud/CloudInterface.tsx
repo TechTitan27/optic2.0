@@ -10,6 +10,12 @@ import { supabaseData } from '../../lib/supabaseData';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
+  CloudFolderCardSkeleton,
+  CloudFileRowSkeleton,
+  CloudStorageSectionSkeleton,
+  CloudBreadcrumbSkeleton,
+} from '../common/Skeleton';
+import {
   Upload,
   FolderPlus,
   Search,
@@ -170,6 +176,9 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
 
   // Load files, folders, and usage for current folder from Supabase
   const loadData = async () => {
+    // Clear stale state immediately during folder/user route navigation
+    setFiles([]);
+    setFolders([]);
     setLoading(true);
     setErrorMessage(null);
     try {
@@ -710,7 +719,19 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         </div>
 
         {/* Folders List (if any exist in current level) */}
-        {folders.length > 0 && (
+        {loading ? (
+          <div className="space-y-2">
+            <span className="text-[11px] font-mono text-zinc-500 uppercase tracking-wider font-semibold">
+              Folders
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+              <CloudFolderCardSkeleton />
+              <CloudFolderCardSkeleton />
+              <CloudFolderCardSkeleton />
+              <CloudFolderCardSkeleton />
+            </div>
+          </div>
+        ) : folders.length > 0 ? (
           <div className="space-y-2">
             <span className="text-[11px] font-mono text-zinc-500 uppercase tracking-wider font-semibold">
               Folders ({folders.length})
@@ -758,7 +779,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
               ))}
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* Files Data Table */}
         <div className="space-y-2">
@@ -770,9 +791,34 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
 
           <Card className="overflow-hidden">
             {loading ? (
-              <div className="p-12 text-center text-xs text-zinc-500 font-mono flex flex-col items-center gap-3">
-                <div className="w-5 h-5 border-2 border-zinc-700 border-t-sky-400 rounded-full animate-spin" />
-                <span>Loading files from Optic Cloud storage...</span>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead>
+                    <tr className="border-b border-zinc-800/80 bg-zinc-950/60 text-zinc-400 text-[11px]">
+                      <th className="py-2.5 px-4 font-semibold">NAME</th>
+                      <th className="py-2.5 px-4 font-semibold">TYPE</th>
+                      <th className="py-2.5 px-4 font-semibold">SIZE</th>
+                      <th className="py-2.5 px-4 font-semibold">UPDATED</th>
+                      <th className="py-2.5 px-4 font-semibold">ACCESS</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">ACTIONS</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/50">
+                    <CloudFileRowSkeleton />
+                    <CloudFileRowSkeleton />
+                    <CloudFileRowSkeleton />
+                    <CloudFileRowSkeleton />
+                    <CloudFileRowSkeleton />
+                  </tbody>
+                </table>
+              </div>
+            ) : errorMessage ? (
+              <div className="p-8 text-center text-xs text-red-400 font-mono space-y-3">
+                <AlertCircle size={20} className="text-red-400 mx-auto" />
+                <p>{errorMessage}</p>
+                <Button size="sm" variant="outline" onClick={loadData} icon={<RefreshCw size={12} />}>
+                  Retry
+                </Button>
               </div>
             ) : filteredFiles.length === 0 && folders.length === 0 ? (
               <div className="p-16 text-center flex flex-col items-center gap-3">

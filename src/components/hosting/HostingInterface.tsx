@@ -13,7 +13,16 @@ import { useToast } from '../../context/ToastContext';
 import { supabaseData } from '../../lib/supabaseData';
 import { storageService } from '../../lib/storageService';
 import { getUserAvatarUrl, getOrgAvatarUrl, getDiceBearOrgAvatarUrl } from '../../lib/avatar';
-import { CreateProjectFlowModal } from './CreateProjectFlowModal';
+import {
+  HostingProjectCardSkeleton,
+  HostingProjectDetailsSkeleton,
+  DeploymentItemSkeleton,
+  DeploymentRowSkeleton,
+  DomainRowSkeleton,
+  TerminalLogsSkeleton,
+  Skeleton,
+  SkeletonText,
+} from '../common/Skeleton';
 import {
   Server,
   Plus,
@@ -63,29 +72,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
   const [selectedProject, setSelectedProject] = useState<HostingProject | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'logs' | 'domains' | 'settings'>('overview');
 
-  // Redesigned Developer Flow: Import or Deploy Modal
-  const [createFlowModalOpen, setCreateFlowModalOpen] = useState(false);
-  const [flowExistingProject, setFlowExistingProject] = useState<HostingProject | null>(null);
-
-  const handleOpenDeployFlow = (targetProject: HostingProject | null = null) => {
-    setFlowExistingProject(targetProject);
-    setCreateFlowModalOpen(true);
-  };
-
-  const handleProjectDeployedFromFlow = async (project: HostingProject) => {
-    setProjects((prev) => {
-      const exists = prev.some((p) => p.id === project.id);
-      if (exists) {
-        return prev.map((p) => (p.id === project.id ? project : p));
-      }
-      return [project, ...prev];
-    });
-    setSelectedProject(project);
-    await fetchProjects();
-    await loadProjectDetails();
-  };
-
-  // Legacy New Project modal state
+  // New Project modal state
   const [createProjectModalOpen, setCreateProjectModalOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectSlug, setNewProjectSlug] = useState('');
@@ -131,6 +118,12 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
   // Copy helper
   const [copiedUrl, setCopiedUrl] = useState(false);
 
+  // Error states for explicit async UI sections
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [deploymentsError, setDeploymentsError] = useState<string | null>(null);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const [domainsError, setDomainsError] = useState<string | null>(null);
+
   // Clear stale data and fetch projects when currentOrg changes
   const fetchProjects = useCallback(async () => {
     if (!currentOrg?.id) {
@@ -139,10 +132,15 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
       setDeploymentsList([]);
       setProjectDomains([]);
       setDeploymentLogs([]);
+      setProjectsError(null);
+      setLoadingProjects(false);
       return;
     }
 
+    // Immediately clear stale projects so navigation doesn't flash previous org's projects
+    setProjects([]);
     setLoadingProjects(true);
+    setProjectsError(null);
     try {
       const data = await supabaseData.getHostingProjects(currentOrg.id);
       setProjects(data);
@@ -160,8 +158,9 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
           setDeploymentLogs([]);
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Error fetching hosting projects:', err);
+      setProjectsError(err?.message || 'Failed to load projects. Please try again.');
     } finally {
       setLoadingProjects(false);
     }
@@ -181,11 +180,19 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
     if (!selectedProject || !currentOrg?.id) {
       setDeploymentsList([]);
       setProjectDomains([]);
+      setLoadingDeployments(false);
+      setLoadingDomains(false);
+      setDeploymentsError(null);
       return;
     }
 
+    // Immediately clear stale deployments & domains so navigation doesn't flash previous project's data
+    setDeploymentsList([]);
+    setProjectDomains([]);
     setLoadingDeployments(true);
     setLoadingDomains(true);
+    setDeploymentsError(null);
+    setDomainsError(null);
     try {
       const [deps, doms] = await Promise.all([
         supabaseData.getProjectDeployments(selectedProject.id, currentOrg.id),
@@ -208,8 +215,10 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
           );
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Error loading project details:', err);
+      setDeploymentsError(err?.message || 'Failed to load deployments for this project.');
+      setDomainsError(err?.message || 'Failed to load domains.');
     } finally {
       setLoadingDeployments(false);
       setLoadingDomains(false);
@@ -224,11 +233,16 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
   useEffect(() => {
     if (!selectedDeploymentForLogs) {
       setDeploymentLogs([]);
+      setLoadingLogs(false);
+      setLogsError(null);
       return;
     }
 
     const fetchLogs = async () => {
+      // Immediately clear stale logs so old logs don't flash while new deployment logs load
+      setDeploymentLogs([]);
       setLoadingLogs(true);
+      setLogsError(null);
       try {
         const logs = await supabaseData.getDeploymentLogs(selectedDeploymentForLogs);
         if (logs.length > 0) {
@@ -264,8 +278,9 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
             setDeploymentLogs([]);
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Error fetching deployment logs:', err);
+        setLogsError(err?.message || 'Failed to retrieve deployment logs.');
       } finally {
         setLoadingLogs(false);
       }
@@ -744,7 +759,11 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
               <Button
                 size="sm"
                 variant="primary"
-                onClick={() => handleOpenDeployFlow(selectedProject)}
+                onClick={() => {
+                  setSelectedFiles([]);
+                  setDeployError(null);
+                  setDeployModalOpen(true);
+                }}
                 icon={<Upload size={14} />}
               >
                 New Deployment
@@ -841,9 +860,13 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
                 </Card>
                 <Card className="p-4">
                   <span className="text-[11px] font-mono text-zinc-500 uppercase">Total Deployments</span>
-                  <p className="text-sm font-semibold text-zinc-100 mt-1">
-                    {deploymentsList.length}
-                  </p>
+                  {loadingDeployments ? (
+                    <Skeleton className="w-10 h-5 mt-1" />
+                  ) : (
+                    <p className="text-sm font-semibold text-zinc-100 mt-1">
+                      {deploymentsList.length}
+                    </p>
+                  )}
                 </Card>
               </div>
 
@@ -896,7 +919,19 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
               </CardHeader>
               <CardContent className="p-0">
                 {loadingDeployments ? (
-                  <div className="p-8 text-center text-xs text-zinc-500">Loading deployments...</div>
+                  <div className="divide-y divide-zinc-800/60">
+                    <DeploymentItemSkeleton />
+                    <DeploymentItemSkeleton />
+                    <DeploymentItemSkeleton />
+                  </div>
+                ) : deploymentsError ? (
+                  <div className="p-8 text-center space-y-3">
+                    <AlertCircle size={20} className="text-red-400 mx-auto" />
+                    <p className="text-xs text-red-400">{deploymentsError}</p>
+                    <Button size="sm" variant="outline" onClick={loadProjectDetails} icon={<RotateCw size={12} />}>
+                      Retry
+                    </Button>
+                  </div>
                 ) : deploymentsList.length === 0 ? (
                   <div className="p-8 text-center text-xs text-zinc-500 space-y-2">
                     <p>No deployments recorded for this project yet.</p>
@@ -994,7 +1029,28 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
 
               <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs text-zinc-300 space-y-2 overflow-x-auto shadow-inner min-h-[220px]">
                 {loadingLogs ? (
-                  <div className="text-zinc-500 text-center py-8">Loading deployment logs...</div>
+                  <TerminalLogsSkeleton />
+                ) : logsError ? (
+                  <div className="text-center py-8 space-y-3">
+                    <AlertCircle size={20} className="text-red-400 mx-auto" />
+                    <p className="text-xs text-red-400">{logsError}</p>
+                    <button
+                      onClick={() => {
+                        if (selectedDeploymentForLogs) {
+                          setLoadingLogs(true);
+                          setLogsError(null);
+                          supabaseData.getDeploymentLogs(selectedDeploymentForLogs)
+                            .then((l) => setDeploymentLogs(l))
+                            .catch((err) => setLogsError(err?.message || 'Failed to load logs'))
+                            .finally(() => setLoadingLogs(false));
+                        }
+                      }}
+                      className="px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 transition-colors inline-flex items-center gap-1.5"
+                    >
+                      <RotateCw size={12} />
+                      <span>Retry</span>
+                    </button>
+                  </div>
                 ) : deploymentLogs.length > 0 ? (
                   deploymentLogs.map((log) => (
                     <div key={log.id} className="flex items-start gap-3">
@@ -1059,9 +1115,19 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
                   </form>
 
                   {loadingDomains ? (
-                    <div className="py-4 text-center text-xs text-zinc-500">Loading domains...</div>
+                    <div className="space-y-3 pt-2">
+                      <DomainRowSkeleton />
+                      <DomainRowSkeleton />
+                    </div>
+                  ) : domainsError ? (
+                    <div className="p-6 text-center space-y-2 border border-red-900/40 rounded-xl bg-red-950/20">
+                      <p className="text-xs text-red-400">{domainsError}</p>
+                      <Button size="sm" variant="outline" onClick={loadProjectDetails} icon={<RotateCw size={12} />}>
+                        Retry
+                      </Button>
+                    </div>
                   ) : projectDomains.length === 0 ? (
-                    <div className="py-4 text-center text-xs text-zinc-500">
+                    <div className="py-6 text-center text-xs text-zinc-500">
                       No custom domains configured yet for this project.
                     </div>
                   ) : (
@@ -1173,7 +1239,7 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
               <Button
                 size="sm"
                 variant="primary"
-                onClick={() => handleOpenDeployFlow(null)}
+                onClick={() => setCreateProjectModalOpen(true)}
                 icon={<Plus size={14} />}
               >
                 Add New
@@ -1183,7 +1249,23 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
 
           {/* Projects Grid */}
           {loadingProjects ? (
-            <div className="py-16 text-center text-xs text-zinc-500">Loading organization projects...</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <HostingProjectCardSkeleton />
+              <HostingProjectCardSkeleton />
+              <HostingProjectCardSkeleton />
+              <HostingProjectCardSkeleton />
+            </div>
+          ) : projectsError ? (
+            <div className="p-8 rounded-2xl border border-red-900/60 bg-red-950/20 text-center space-y-3">
+              <AlertCircle size={24} className="text-red-400 mx-auto" />
+              <div className="space-y-1">
+                <h3 className="text-sm font-semibold text-zinc-200">Unable to load projects</h3>
+                <p className="text-xs text-red-400 max-w-sm mx-auto">{projectsError}</p>
+              </div>
+              <Button size="sm" variant="outline" onClick={fetchProjects} icon={<RotateCw size={13} />}>
+                Retry
+              </Button>
+            </div>
           ) : projects.length === 0 ? (
             <div className="p-12 text-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/30 space-y-4">
               <div className="w-12 h-12 rounded-xl bg-zinc-800/80 text-zinc-400 mx-auto flex items-center justify-center">
@@ -1198,7 +1280,7 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
               <Button
                 size="sm"
                 variant="primary"
-                onClick={() => handleOpenDeployFlow(null)}
+                onClick={() => setCreateProjectModalOpen(true)}
                 icon={<Plus size={14} />}
               >
                 Add New Project
@@ -1534,14 +1616,6 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
           )}
         </div>
       </Modal>
-
-      {/* MODAL 3: Redesigned Developer Flow: Import or Deploy */}
-      <CreateProjectFlowModal
-        isOpen={createFlowModalOpen}
-        onClose={() => setCreateFlowModalOpen(false)}
-        onProjectCreated={handleProjectDeployedFromFlow}
-        existingProject={flowExistingProject}
-      />
     </div>
   );
 };

@@ -5,6 +5,7 @@ import { ChevronDown, Plus, Check, Building2 } from 'lucide-react';
 import { Modal } from './Modal';
 import { Input } from './Input';
 import { Button } from './Button';
+import { OrgSwitcherSkeleton } from './Skeleton';
 
 interface OrganizationSwitcherProps {
   className?: string;
@@ -15,7 +16,7 @@ export const OrganizationSwitcher: React.FC<OrganizationSwitcherProps> = ({
   className = '',
   compact = false,
 }) => {
-  const { organizations, currentOrg, setCurrentOrg, createOrg } = useOrganization();
+  const { organizations, currentOrg, setCurrentOrg, createOrg, loading } = useOrganization();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [newOrgName, setNewOrgName] = useState('');
@@ -47,6 +48,11 @@ export const OrganizationSwitcher: React.FC<OrganizationSwitcherProps> = ({
       setCreating(false);
     }
   };
+
+  // Immediate skeleton state during async initial loading
+  if (loading) {
+    return <OrgSwitcherSkeleton />;
+  }
 
   if (!currentOrg && organizations.length === 0) {
     return (
