@@ -33,7 +33,7 @@ export const ApiKeysView: React.FC = () => {
   const fetchKeys = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/keys/list', {
+      const res = await fetch('/api/keys?action=list', {
         headers: getAuthHeaders(),
       });
       if (res.ok) {
@@ -60,7 +60,7 @@ export const ApiKeysView: React.FC = () => {
     setError(null);
 
     try {
-      const res = await fetch('/api/keys/create', {
+      const res = await fetch('/api/keys?action=create', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ name: newKeyName.trim() }),
@@ -90,7 +90,7 @@ export const ApiKeysView: React.FC = () => {
       return;
     }
     try {
-      await fetch('/api/keys/revoke', {
+      await fetch('/api/keys?action=revoke', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ id }),
@@ -108,7 +108,7 @@ export const ApiKeysView: React.FC = () => {
       return;
     }
     try {
-      await fetch('/api/keys/delete', {
+      await fetch('/api/keys?action=delete', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ id }),

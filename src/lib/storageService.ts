@@ -49,12 +49,12 @@ export class OpticStorageService {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      let res = await fetch('/status', { headers });
+      let res = await fetch('/api/status', { headers });
       if (!res.ok) {
-        res = await fetch('/api/status', { headers });
+        res = await fetch('/api/storage?action=status', { headers });
       }
       if (!res.ok) {
-        res = await fetch('/api/storage/status', { headers });
+        res = await fetch('/status', { headers });
       }
       if (res.ok) {
         const data = await res.json();
@@ -88,7 +88,7 @@ export class OpticStorageService {
       throw new Error('You must be signed in to upload files.');
     }
 
-    const res = await fetch('/api/storage/upload-url', {
+    const res = await fetch('/api/storage?action=upload-url', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -130,8 +130,8 @@ export class OpticStorageService {
       throw new Error('You must be signed in to upload deployment files.');
     }
 
-    // Try dedicated deployment upload-url endpoint first, fallback to general
-    let res = await fetch('/api/hosting/deployments/upload-url', {
+    // Request presigned URL from consolidated hosting API
+    let res = await fetch('/api/hosting?action=upload-url', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -223,7 +223,7 @@ export class OpticStorageService {
       const token = await this.getAuthToken();
       if (!token || !storageKey) return;
 
-      await fetch('/api/storage/cleanup-orphan', {
+      await fetch('/api/storage?action=cleanup-orphan', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -247,7 +247,7 @@ export class OpticStorageService {
       throw new Error('You must be signed in to download files.');
     }
 
-    const res = await fetch(`/api/storage/download?fileId=${encodeURIComponent(fileId)}`, {
+    const res = await fetch(`/api/storage?action=download&fileId=${encodeURIComponent(fileId)}`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -295,7 +295,7 @@ export class OpticStorageService {
     error?: string;
   }> {
     try {
-      const res = await fetch(`/api/storage/share?token=${encodeURIComponent(token)}`, {
+      const res = await fetch(`/api/share?token=${encodeURIComponent(token)}`, {
         method: 'GET',
       });
       const data = await res.json();
@@ -317,7 +317,7 @@ export class OpticStorageService {
       throw new Error('You must be signed in to delete files.');
     }
 
-    const res = await fetch(`/api/storage/files?fileId=${encodeURIComponent(fileId)}`, {
+    const res = await fetch(`/api/storage?action=delete&fileId=${encodeURIComponent(fileId)}`, {
       method: 'DELETE',
       headers: {
         Authorization: `Bearer ${token}`,

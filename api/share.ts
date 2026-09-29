@@ -1,5 +1,5 @@
-import { getSupabaseServerClient } from '../../src/server/supabaseServer.js';
-import { createSharePresignedUrls, getR2Config } from '../../src/server/r2Storage.js';
+import { getSupabaseServerClient } from '../src/server/supabaseServer.js';
+import { createSharePresignedUrls, getR2Config } from '../src/server/r2Storage.js';
 
 export default async function handler(req: any, res: any) {
   if (req.method === 'OPTIONS') {
@@ -19,6 +19,13 @@ export default async function handler(req: any, res: any) {
       try {
         const u = new URL(req.url, 'http://localhost');
         rawToken = u.searchParams.get('token') || u.searchParams.get('id');
+        if (!rawToken) {
+          const parts = u.pathname.split('/').filter(Boolean);
+          // e.g. /api/share/:token
+          if (parts.length >= 3 && parts[1] === 'share') {
+            rawToken = parts[2];
+          }
+        }
       } catch {}
     }
 
@@ -46,14 +53,14 @@ export default async function handler(req: any, res: any) {
 
     const sb = getSupabaseServerClient();
     if (!sb) {
-      console.error('[API /api/storage/share] Database server client is not available.');
+      console.error('[API /api/share] Database server client is not available.');
       return res.status(503).json({
         success: false,
         error: 'Database connection unavailable.',
       });
     }
 
-    // 1. Find share_links row by token: SELECT * FROM public.share_links WHERE token = '<TOKEN>'
+    // 1. Find share_links row by token
     const { data: shareLink, error: shareErr } = await sb
       .from('share_links')
       .select('*')
@@ -61,7 +68,7 @@ export default async function handler(req: any, res: any) {
       .maybeSingle();
 
     if (shareErr) {
-      console.error('[API /api/storage/share] Supabase query error fetching share_link:', shareErr);
+      console.error('[API /api/share] Supabase query error fetching share_link:', shareErr);
       return res.status(500).json({
         success: false,
         error: `Database error looking up share link: ${shareErr.message || 'Lookup failed'}`,
@@ -88,7 +95,7 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // 3. Fetch associated file: SELECT * FROM public.files WHERE id = '<share_links.file_id>'
+    // 3. Fetch associated file
     const { data: file, error: fileErr } = await sb
       .from('files')
       .select('*')
@@ -96,7 +103,7 @@ export default async function handler(req: any, res: any) {
       .maybeSingle();
 
     if (fileErr) {
-      console.error('[API /api/storage/share] Supabase query error fetching file:', fileErr);
+      console.error('[API /api/share] Supabase query error fetching file:', fileErr);
       return res.status(500).json({
         success: false,
         error: `Database error fetching file: ${fileErr.message || 'Lookup failed'}`,
@@ -111,7 +118,7 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    // 4. Retrieve uploader's display name from profiles table (explicitly do NOT expose email)
+    // 4. Retrieve uploader's display name from profiles table (do not expose email)
     let uploaderName = 'Optic User';
     if (file.user_id) {
       try {
@@ -126,7 +133,7 @@ export default async function handler(req: any, res: any) {
             profile.display_name || profile.full_name || profile.name || 'Optic User';
         }
       } catch (pErr) {
-        console.warn('[API /api/storage/share] Profile query warning:', pErr);
+        console.warn('[API /api/share] Profile query warning:', pErr);
       }
     }
 
@@ -145,7 +152,7 @@ export default async function handler(req: any, res: any) {
         previewUrl = urls.previewUrl;
         downloadUrl = urls.downloadUrl;
       } catch (r2Err) {
-        console.error('[API /api/storage/share] Presigned URL error:', r2Err);
+        console.error('[API /api/share] Presigned URL error:', r2Err);
       }
     }
 
@@ -187,7 +194,7 @@ export default async function handler(req: any, res: any) {
       downloadUrl,
     });
   } catch (err: any) {
-    console.error('[API /api/storage/share] Error:', err);
+    console.error('[API /api/share] Error:', err);
     return res.status(500).json({
       success: false,
       error: err?.message || 'Failed to process share link',

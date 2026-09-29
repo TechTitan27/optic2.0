@@ -21,6 +21,9 @@ export default async function handler(req: any, res: any) {
     success: true,
     service: 'Optic Cloud & Edge Platform',
     timestamp: new Date().toISOString(),
+    isConfigured: config.isConfigured,
+    provider: 'Cloudflare R2',
+    bucketName: config.bucketName || null,
     storage: {
       provider: 'Cloudflare R2',
       configured: config.isConfigured,

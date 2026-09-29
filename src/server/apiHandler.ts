@@ -82,11 +82,20 @@ export async function handleApiRequest(
 ) {
   const url = req.url || '';
 
-  if (!url.startsWith('/api/') && !url.startsWith('/status')) {
+  if (!url.startsWith('/api') && !url.startsWith('/status')) {
     return next();
   }
 
   const method = req.method || 'GET';
+  let pathname = '';
+  let action = '';
+  try {
+    const parsed = new URL(url, 'http://localhost');
+    pathname = parsed.pathname;
+    action = (parsed.searchParams.get('action') || '').toLowerCase().trim();
+  } catch {
+    pathname = url.split('?')[0];
+  }
 
   // 0. GET/HEAD /api/deployments/:deploymentId/* (REAL PUBLIC STATIC FILE SERVER)
   if (url.startsWith('/api/deployments')) {
@@ -94,7 +103,7 @@ export async function handleApiRequest(
   }
 
   // 1. POST /api/waitlist
-  if (url === '/api/waitlist' && method === 'POST') {
+  if ((pathname === '/api/waitlist' || pathname === '/v1/waitlist') && method === 'POST') {
     try {
       const body = await parseJsonBody(req);
       const email = (body.email || '').trim().toLowerCase();
@@ -133,8 +142,12 @@ export async function handleApiRequest(
     }
   }
 
-  // 2. POST /api/keys/create
-  if (url === '/api/keys/create' && method === 'POST') {
+  // 2. POST /api/keys/create or /api/keys?action=create
+  if (
+    ((pathname === '/api/keys' && (action === 'create' || !action)) ||
+      pathname === '/api/keys/create') &&
+    method === 'POST'
+  ) {
     try {
       const body = await parseJsonBody(req);
       const name = (body.name || '').trim();
@@ -203,8 +216,12 @@ export async function handleApiRequest(
     }
   }
 
-  // 3. GET /api/keys/list
-  if (url === '/api/keys/list' && method === 'GET') {
+  // 3. GET /api/keys/list or /api/keys?action=list
+  if (
+    ((pathname === '/api/keys' && (action === 'list' || !action)) ||
+      pathname === '/api/keys/list') &&
+    method === 'GET'
+  ) {
     try {
       const { userId, token } = await resolveUserId(req);
       const sb = getSupabaseServerClient(token);
@@ -248,8 +265,12 @@ export async function handleApiRequest(
     }
   }
 
-  // 4. POST /api/keys/revoke
-  if (url === '/api/keys/revoke' && method === 'POST') {
+  // 4. POST /api/keys/revoke or /api/keys?action=revoke
+  if (
+    ((pathname === '/api/keys' && action === 'revoke') ||
+      pathname === '/api/keys/revoke') &&
+    method === 'POST'
+  ) {
     try {
       const body = await parseJsonBody(req);
       const { id } = body;
@@ -283,8 +304,12 @@ export async function handleApiRequest(
     }
   }
 
-  // 5. POST /api/keys/delete
-  if (url === '/api/keys/delete' && method === 'POST') {
+  // 5. POST/DELETE /api/keys/delete or /api/keys?action=delete
+  if (
+    ((pathname === '/api/keys' && action === 'delete') ||
+      pathname === '/api/keys/delete') &&
+    (method === 'POST' || method === 'DELETE')
+  ) {
     try {
       const body = await parseJsonBody(req);
       const { id } = body;
@@ -402,8 +427,12 @@ export async function handleApiRequest(
     }
   }
 
-  // 7. GET /api/hosting/deployments (REAL SUPABASE DATA, ZERO MOCK DATA)
-  if (url.startsWith('/api/hosting/deployments') && method === 'GET') {
+  // 7. GET /api/hosting/deployments or /api/hosting?action=deployments
+  if (
+    ((pathname === '/api/hosting' && action === 'deployments') ||
+      pathname.startsWith('/api/hosting/deployments')) &&
+    method === 'GET'
+  ) {
     try {
       const { userId, token } = await resolveUserId(req);
       const sb = getSupabaseServerClient(token);
@@ -470,10 +499,11 @@ export async function handleApiRequest(
     }
   }
 
-  // 7b. POST /api/hosting/deployments/upload-url or /api/hosting/upload-url
+  // 7b. POST /api/hosting/upload-url or /api/hosting?action=upload-url
   if (
-    (url.startsWith('/api/hosting/deployments/upload-url') ||
-      url.startsWith('/api/hosting/upload-url')) &&
+    ((pathname === '/api/hosting' && action === 'upload-url') ||
+      pathname.startsWith('/api/hosting/deployments/upload-url') ||
+      pathname.startsWith('/api/hosting/upload-url')) &&
     method === 'POST'
   ) {
     try {
@@ -540,8 +570,12 @@ export async function handleApiRequest(
     }
   }
 
-  // 8. GET /api/hosting/projects
-  if (url.startsWith('/api/hosting/projects') && method === 'GET') {
+  // 8. GET /api/hosting/projects or /api/hosting?action=projects
+  if (
+    ((pathname === '/api/hosting' && action === 'projects') ||
+      pathname.startsWith('/api/hosting/projects')) &&
+    method === 'GET'
+  ) {
     try {
       const { token } = await resolveUserId(req);
       const sb = getSupabaseServerClient(token);
@@ -582,7 +616,11 @@ export async function handleApiRequest(
   }
 
   // 9. GET /api/organizations
-  if (url.startsWith('/api/organizations') && method === 'GET') {
+  if (
+    (pathname === '/api/organizations' ||
+      pathname.startsWith('/api/organizations')) &&
+    method === 'GET'
+  ) {
     try {
       const { userId, token } = await resolveUserId(req);
       const sb = getSupabaseServerClient(token);
@@ -633,8 +671,13 @@ export async function handleApiRequest(
     }
   }
 
-  // 9b. GET /api/storage/share (Public Shared File Access & Presigned URL Generation)
-  if (url.startsWith('/api/storage/share') && method === 'GET') {
+  // 9b. GET /api/storage/share or /api/share or /api/storage?action=share
+  if (
+    ((pathname === '/api/storage' && action === 'share') ||
+      pathname.startsWith('/api/storage/share') ||
+      pathname.startsWith('/api/share')) &&
+    method === 'GET'
+  ) {
     try {
       const parsedUrl = new URL(url, 'http://localhost');
       let rawToken = parsedUrl.searchParams.get('token') || parsedUrl.searchParams.get('id');
@@ -819,8 +862,12 @@ export async function handleApiRequest(
     }
   }
 
-  // 10. POST /api/storage/upload-url
-  if (url.startsWith('/api/storage/upload-url') && method === 'POST') {
+  // 10. POST /api/storage/upload-url or /api/storage?action=upload-url
+  if (
+    ((pathname === '/api/storage' && action === 'upload-url') ||
+      pathname.startsWith('/api/storage/upload-url')) &&
+    method === 'POST'
+  ) {
     try {
       const authHeader = req.headers['authorization'] as string | undefined;
       const user = await verifyUserToken(authHeader);
@@ -875,8 +922,12 @@ export async function handleApiRequest(
     }
   }
 
-  // 11. GET /api/storage/download/:fileId or /api/storage/download?fileId=...
-  if (url.startsWith('/api/storage/download') && method === 'GET') {
+  // 11. GET /api/storage/download or /api/storage?action=download
+  if (
+    ((pathname === '/api/storage' && action === 'download') ||
+      pathname.startsWith('/api/storage/download')) &&
+    method === 'GET'
+  ) {
     try {
       const authHeader = req.headers['authorization'] as string | undefined;
       const user = await verifyUserToken(authHeader);
@@ -899,7 +950,7 @@ export async function handleApiRequest(
 
       const parsedUrl = new URL(url, 'http://localhost');
       let fileId = parsedUrl.searchParams.get('fileId') || parsedUrl.searchParams.get('id');
-      if (!fileId && parsedUrl.pathname !== '/api/storage/download') {
+      if (!fileId && parsedUrl.pathname !== '/api/storage/download' && parsedUrl.pathname !== '/api/storage') {
         const parts = parsedUrl.pathname.split('/');
         fileId = parts[parts.length - 1];
       }
@@ -934,8 +985,12 @@ export async function handleApiRequest(
     }
   }
 
-  // 12. DELETE /api/storage/files/:fileId or /api/storage/files?fileId=...
-  if (url.startsWith('/api/storage/files') && (method === 'DELETE' || method === 'POST')) {
+  // 12. DELETE /api/storage/files or /api/storage?action=delete
+  if (
+    ((pathname === '/api/storage' && (action === 'delete' || action === 'files')) ||
+      pathname.startsWith('/api/storage/files')) &&
+    (method === 'DELETE' || method === 'POST')
+  ) {
     try {
       const authHeader = req.headers['authorization'] as string | undefined;
       const user = await verifyUserToken(authHeader);
@@ -949,7 +1004,7 @@ export async function handleApiRequest(
 
       const parsedUrl = new URL(url, 'http://localhost');
       let fileId = parsedUrl.searchParams.get('fileId') || parsedUrl.searchParams.get('id');
-      if (!fileId && parsedUrl.pathname !== '/api/storage/files') {
+      if (!fileId && parsedUrl.pathname !== '/api/storage/files' && parsedUrl.pathname !== '/api/storage') {
         const parts = parsedUrl.pathname.split('/');
         fileId = parts[parts.length - 1];
       }
@@ -987,13 +1042,16 @@ export async function handleApiRequest(
     }
   }
 
-  // 13. GET /status, /api/status, or /api/storage/status
+  // 13. GET /status, /api/status, /api/health, or /api/storage?action=status
   const isStatusEndpoint =
     (url === '/status' ||
       url.startsWith('/status?') ||
       url === '/api/status' ||
       url.startsWith('/api/status?') ||
-      url.startsWith('/api/storage/status')) &&
+      url === '/api/health' ||
+      url.startsWith('/api/health?') ||
+      url.startsWith('/api/storage/status') ||
+      (pathname === '/api/storage' && action === 'status')) &&
     method === 'GET';
 
   if (isStatusEndpoint) {
@@ -1004,6 +1062,7 @@ export async function handleApiRequest(
       success: true,
       service: 'Optic Cloud & Edge Platform',
       timestamp: new Date().toISOString(),
+      isConfigured: config.isConfigured,
       storage: {
         provider: 'Cloudflare R2',
         configured: config.isConfigured,
@@ -1022,8 +1081,12 @@ export async function handleApiRequest(
     });
   }
 
-  // 14. POST /api/storage/cleanup-orphan
-  if (url.startsWith('/api/storage/cleanup-orphan') && method === 'POST') {
+  // 14. POST /api/storage/cleanup-orphan or /api/storage?action=cleanup-orphan
+  if (
+    ((pathname === '/api/storage' && action === 'cleanup-orphan') ||
+      pathname.startsWith('/api/storage/cleanup-orphan')) &&
+    method === 'POST'
+  ) {
     try {
       const authHeader = req.headers['authorization'] as string | undefined;
       const user = await verifyUserToken(authHeader);
