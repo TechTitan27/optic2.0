@@ -531,3 +531,38 @@ export const PublicShareSkeleton: React.FC = () => {
   );
 };
 
+/**
+ * API Key Table Row Skeleton: matches API keys table columns
+ */
+export const ApiKeyRowSkeleton: React.FC = () => {
+  return (
+    <tr className="border-b border-zinc-800/50 animate-shimmer" aria-hidden="true">
+      <td className="py-3 px-4">
+        <div className="flex items-center gap-2">
+          <Skeleton className="w-3.5 h-3.5 rounded shrink-0" />
+          <Skeleton className="w-28 h-4" />
+        </div>
+      </td>
+      <td className="py-3 px-4">
+        <Skeleton className="w-32 h-4 rounded" />
+      </td>
+      <td className="py-3 px-4">
+        <Skeleton className="w-20 h-3" />
+      </td>
+      <td className="py-3 px-4">
+        <Skeleton className="w-16 h-3" />
+      </td>
+      <td className="py-3 px-4">
+        <Skeleton className="w-14 h-5 rounded-full" />
+      </td>
+      <td className="py-3 px-4 text-right">
+        <div className="flex items-center justify-end gap-2">
+          <Skeleton className="w-16 h-6 rounded" />
+          <Skeleton className="w-6 h-6 rounded" />
+        </div>
+      </td>
+    </tr>
+  );
+};
+
+

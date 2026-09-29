@@ -20,7 +20,7 @@ export const AuthGate: React.FC<AuthGateProps> = ({
 }) => {
   const { user, loading } = useAuth();
 
-  if (loading) {
+  if (loading && !user) {
     return (
       <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">

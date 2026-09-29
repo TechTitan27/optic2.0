@@ -51,7 +51,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
   onNavigateSurface,
   onOpenAuthModal,
 }) => {
-  const { user, profile } = useAuth();
+  const { user, profile, loading: authLoading } = useAuth();
   const toast = useToast();
   const [files, setFiles] = useState<FileItem[]>([]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
@@ -83,12 +83,18 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
   };
 
   const handleOpenFolder = (folder: FolderItem) => {
+    setLoading(true);
+    setFiles([]);
+    setFolders([]);
     setFolderBreadcrumbs((prev) => [...prev, folder]);
     setCurrentFolder(folder);
     updateUrlFolder(folder.id);
   };
 
   const handleNavigateToRoot = () => {
+    setLoading(true);
+    setFiles([]);
+    setFolders([]);
     setFolderBreadcrumbs([]);
     setCurrentFolder(null);
     updateUrlFolder(null);
@@ -96,12 +102,18 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
 
   const handleNavigateToBreadcrumb = (index: number) => {
     const target = folderBreadcrumbs[index];
+    setLoading(true);
+    setFiles([]);
+    setFolders([]);
     setFolderBreadcrumbs((prev) => prev.slice(0, index + 1));
     setCurrentFolder(target);
     updateUrlFolder(target.id);
   };
 
   const handleNavigateUp = () => {
+    setLoading(true);
+    setFiles([]);
+    setFolders([]);
     if (folderBreadcrumbs.length > 1) {
       const nextBreadcrumbs = folderBreadcrumbs.slice(0, -1);
       const parent = nextBreadcrumbs[nextBreadcrumbs.length - 1];
@@ -176,6 +188,11 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
 
   // Load files, folders, and usage for current folder from Supabase
   const loadData = async () => {
+    if (authLoading) {
+      setLoading(true);
+      return;
+    }
+
     // Clear stale state immediately during folder/user route navigation
     setFiles([]);
     setFolders([]);
@@ -214,7 +231,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
 
   useEffect(() => {
     loadData();
-  }, [user, currentFolder]);
+  }, [user?.id, currentFolder?.id, authLoading]);
 
   // Upload handler with real Cloudflare R2 presigned PUT & Supabase metadata
   const handleUploadFiles = async (selectedFiles: FileList | null) => {
@@ -788,9 +805,15 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         {/* Files Data Table */}
         <div className="space-y-2">
           <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500 uppercase tracking-wider font-semibold">
-            <span>
-              Files ({filteredFiles.length}) in {currentPathDisplay}
-            </span>
+            {loading ? (
+              <div className="h-4 flex items-center">
+                <div className="w-36 h-3 bg-zinc-800/80 rounded animate-shimmer" />
+              </div>
+            ) : (
+              <span>
+                Files ({filteredFiles.length}) in {currentPathDisplay}
+              </span>
+            )}
           </div>
 
           <Card className="overflow-hidden">

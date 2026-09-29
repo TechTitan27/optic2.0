@@ -4,6 +4,7 @@ import { Input } from '../common/Input';
 import { Modal } from '../common/Modal';
 import { ApiKeyItem, NewApiKeyResult } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { ApiKeyRowSkeleton } from '../common/Skeleton';
 import { Key, Plus, Trash2, Copy, Check, ShieldCheck, AlertTriangle, ShieldAlert } from 'lucide-react';
 
 export const ApiKeysView: React.FC = () => {
@@ -162,9 +163,25 @@ export const ApiKeysView: React.FC = () => {
       {/* Keys Table Card */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 overflow-hidden">
         {loading ? (
-          <div className="p-8 text-center text-xs text-zinc-500 font-mono flex items-center justify-center gap-2">
-            <div className="w-4 h-4 border-2 border-zinc-600 border-t-zinc-200 rounded-full animate-spin" />
-            <span>Loading API keys from Supabase database...</span>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs font-mono">
+              <thead>
+                <tr className="border-b border-zinc-800/80 bg-zinc-950/60 text-zinc-400 text-[11px]">
+                  <th className="py-2.5 px-4 font-semibold">NAME</th>
+                  <th className="py-2.5 px-4 font-semibold">KEY PREFIX</th>
+                  <th className="py-2.5 px-4 font-semibold">CREATED</th>
+                  <th className="py-2.5 px-4 font-semibold">LAST USED</th>
+                  <th className="py-2.5 px-4 font-semibold">STATUS</th>
+                  <th className="py-2.5 px-4 font-semibold text-right">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/60">
+                <ApiKeyRowSkeleton />
+                <ApiKeyRowSkeleton />
+                <ApiKeyRowSkeleton />
+                <ApiKeyRowSkeleton />
+              </tbody>
+            </table>
           </div>
         ) : keys.length === 0 ? (
           <div className="p-12 text-center flex flex-col items-center gap-3">

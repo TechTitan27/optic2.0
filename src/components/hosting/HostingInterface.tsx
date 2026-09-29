@@ -68,7 +68,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
 
   // Projects state
   const [projects, setProjects] = useState<HostingProject[]>([]);
-  const [loadingProjects, setLoadingProjects] = useState<boolean>(false);
+  const [loadingProjects, setLoadingProjects] = useState<boolean>(true);
   const [selectedProject, setSelectedProject] = useState<HostingProject | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'logs' | 'domains' | 'settings'>('overview');
 
@@ -86,7 +86,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
 
   // Deployments state
   const [deploymentsList, setDeploymentsList] = useState<DeploymentItem[]>([]);
-  const [loadingDeployments, setLoadingDeployments] = useState<boolean>(false);
+  const [loadingDeployments, setLoadingDeployments] = useState<boolean>(true);
   const [selectedDeploymentForLogs, setSelectedDeploymentForLogs] = useState<string | null>(null);
 
   // Deployment Logs state
@@ -108,7 +108,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
 
   // Domains state
   const [projectDomains, setProjectDomains] = useState<DomainItem[]>([]);
-  const [loadingDomains, setLoadingDomains] = useState<boolean>(false);
+  const [loadingDomains, setLoadingDomains] = useState<boolean>(true);
   const [customDomainInput, setCustomDomainInput] = useState('');
   const [addingDomain, setAddingDomain] = useState(false);
 
@@ -126,6 +126,11 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
 
   // Clear stale data and fetch projects when currentOrg changes
   const fetchProjects = useCallback(async () => {
+    if (orgLoading) {
+      setLoadingProjects(true);
+      return;
+    }
+
     if (!currentOrg?.id) {
       setProjects([]);
       setSelectedProject(null);
@@ -164,7 +169,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
     } finally {
       setLoadingProjects(false);
     }
-  }, [currentOrg?.id]);
+  }, [currentOrg?.id, orgLoading]);
 
   // When organization changes: clear stale project/deployment state and refresh projects
   useEffect(() => {
@@ -172,8 +177,13 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
     setDeploymentsList([]);
     setProjectDomains([]);
     setDeploymentLogs([]);
-    fetchProjects();
-  }, [currentOrg?.id]);
+    if (currentOrg?.id) {
+      setLoadingProjects(true);
+      fetchProjects();
+    } else if (!orgLoading) {
+      setLoadingProjects(false);
+    }
+  }, [currentOrg?.id, orgLoading, fetchProjects]);
 
   // Fetch project deployments and domains when selectedProject changes
   const loadProjectDetails = useCallback(async () => {
@@ -1229,22 +1239,32 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
         /* CASE 3: ALL PROJECTS LIST (SCOPED TO CURRENT ORGANIZATION) */
         <div className="space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <img
-                src={getOrgAvatarUrl(currentOrg)}
-                alt={currentOrg?.name || 'Organization'}
-                className="w-10 h-10 rounded-xl object-cover border border-zinc-700/80 bg-zinc-800 shadow-md"
-              />
-              <div>
-                <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                  <span>{currentOrg?.name}</span>
-                  <span className="text-xs font-mono text-zinc-500 font-normal">({currentOrg?.slug})</span>
-                </h1>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Hosting projects and deployments scoped to this organization.
-                </p>
+            {orgLoading && !currentOrg ? (
+              <div className="flex items-center gap-3 animate-shimmer" aria-hidden="true">
+                <Skeleton className="w-10 h-10 rounded-xl" />
+                <div className="space-y-1.5">
+                  <Skeleton className="w-36 h-5" />
+                  <Skeleton className="w-48 h-3.5" />
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <img
+                  src={getOrgAvatarUrl(currentOrg)}
+                  alt={currentOrg?.name || 'Organization'}
+                  className="w-10 h-10 rounded-xl object-cover border border-zinc-700/80 bg-zinc-800 shadow-md"
+                />
+                <div>
+                  <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                    <span>{currentOrg?.name}</span>
+                    <span className="text-xs font-mono text-zinc-500 font-normal">({currentOrg?.slug})</span>
+                  </h1>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Hosting projects and deployments scoped to this organization.
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className="flex items-center gap-2">
               <Button
@@ -1259,7 +1279,7 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
           </div>
 
           {/* Projects Grid */}
-          {loadingProjects ? (
+          {(orgLoading || loadingProjects) ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <HostingProjectCardSkeleton />
               <HostingProjectCardSkeleton />
@@ -1305,6 +1325,10 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
                   hoverEffect
                   className="p-5 cursor-pointer flex flex-col justify-between"
                   onClick={() => {
+                    setLoadingDeployments(true);
+                    setLoadingDomains(true);
+                    setDeploymentsList([]);
+                    setProjectDomains([]);
                     setSelectedProject(proj);
                     setActiveTab('overview');
                   }}

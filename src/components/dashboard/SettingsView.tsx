@@ -356,7 +356,7 @@ export const SettingsView: React.FC = () => {
     customAvatar ||
     getUserAvatarUrl(user ? { ...user, fullName, name: fullName } : { fullName, name: fullName });
 
-  if (authLoading && !profile && !user) {
+  if (authLoading) {
     return <AccountSettingsSkeleton />;
   }
 

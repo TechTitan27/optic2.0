@@ -36,7 +36,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   onNavigateSurface,
   children,
 }) => {
-  const { user, profile, signOut } = useAuth();
+  const { user, profile, signOut, loading: authLoading } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const isOverviewActive = (currentSurface === 'dashboard' || !currentSurface) && currentTab === 'overview';
@@ -232,20 +232,32 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         {/* Sidebar Footer: User profile & Logout */}
         <div className="p-3 border-t border-zinc-800 bg-zinc-950 space-y-2.5">
           <div className="flex items-center justify-between px-2 py-1.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
-            <div className="flex items-center gap-2 overflow-hidden">
-              <img
-                src={getUserAvatarUrl(user)}
-                alt={user?.email || 'User'}
-                className="w-6 h-6 rounded-md object-cover border border-zinc-700/80 shrink-0 bg-zinc-800"
-              />
-              <div className="overflow-hidden">
-                <p className="text-[11px] font-medium text-zinc-200 truncate">
-                  {profile?.fullName || user?.email?.split('@')[0] || 'developer'}
-                </p>
-                <p className="text-[10px] text-zinc-500 truncate">
-                  {user?.email || 'developer@optic.doy.best'}
-                </p>
-              </div>
+            <div className="flex items-center gap-2 overflow-hidden flex-1">
+              {authLoading && !user ? (
+                <>
+                  <div className="w-6 h-6 rounded-md bg-zinc-800 animate-shimmer shrink-0" />
+                  <div className="space-y-1 flex-1">
+                    <div className="w-16 h-2.5 bg-zinc-800 rounded animate-shimmer" />
+                    <div className="w-24 h-2 bg-zinc-800 rounded animate-shimmer" />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <img
+                    src={getUserAvatarUrl(user)}
+                    alt={user?.email || 'User'}
+                    className="w-6 h-6 rounded-md object-cover border border-zinc-700/80 shrink-0 bg-zinc-800"
+                  />
+                  <div className="overflow-hidden">
+                    <p className="text-[11px] font-medium text-zinc-200 truncate">
+                      {profile?.fullName || user?.email?.split('@')[0] || 'developer'}
+                    </p>
+                    <p className="text-[10px] text-zinc-500 truncate">
+                      {user?.email || 'developer@optic.doy.best'}
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
             <button
               onClick={() => signOut()}

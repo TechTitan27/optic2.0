@@ -30,7 +30,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onNavigateSurface,
   onSelectNav,
 }) => {
-  const { user, profile } = useAuth();
+  const { user, profile, loading: authLoading } = useAuth();
   const { currentOrg } = useOrganization();
   const [recentFiles, setRecentFiles] = useState<FileItem[]>([]);
   const [recentDeployments, setRecentDeployments] = useState<DeploymentItem[]>([]);
@@ -89,22 +89,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           const dData = await depRes.json();
           setRecentDeployments(dData.deployments || []);
         } else {
-          setRecentDeployments([
-            {
-              id: 'dep_init',
-              projectId: 'proj_optic',
-              projectName: 'optic-workspace',
-              status: 'ready',
-              url: 'https://optic.doy.best',
-              commitHash: 'main-v1.0',
-              commitMessage: 'feat: connect real Supabase storage & auth',
-              creator: profile?.fullName || 'developer',
-              branch: 'main',
-              durationSeconds: 12,
-              environment: 'production',
-              createdAt: new Date().toISOString(),
-            },
-          ]);
+          setRecentDeployments([]);
         }
       } catch (err) {
         console.warn('Dashboard data fetch notification:', err);
@@ -118,7 +103,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
     return () => {
       mounted = false;
     };
-  }, [user]);
+  }, [user?.id, currentOrg?.id]);
 
   const userName = profile?.fullName || user?.email?.split('@')[0] || 'developer';
   const avatarUrl = profile?.avatarUrl;
@@ -142,28 +127,40 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
       {/* Top Greeting with User Avatar & Account Badge */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-zinc-900">
         <div className="flex items-center gap-3.5">
-          {avatarUrl ? (
-            <img
-              src={avatarUrl}
-              alt={userName}
-              referrerPolicy="no-referrer"
-              className="w-12 h-12 rounded-xl border border-zinc-800 object-cover shadow-sm"
-            />
-          ) : (
-            <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center font-semibold text-zinc-200 text-base shadow-sm">
-              {userName.charAt(0).toUpperCase()}
+          {authLoading && !user && !profile ? (
+            <div className="flex items-center gap-3.5 animate-shimmer" aria-hidden="true">
+              <Skeleton className="w-12 h-12 rounded-xl" />
+              <div className="space-y-1.5">
+                <Skeleton className="w-48 h-6" />
+                <Skeleton className="w-36 h-3" />
+              </div>
             </div>
+          ) : (
+            <>
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt={userName}
+                  referrerPolicy="no-referrer"
+                  className="w-12 h-12 rounded-xl border border-zinc-800 object-cover shadow-sm"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center font-semibold text-zinc-200 text-base shadow-sm">
+                  {userName.charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div>
+                <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+                  {getGreeting()}, {userName}
+                </h1>
+                <p className="text-xs text-zinc-400 mt-0.5 font-mono flex items-center gap-2">
+                  <span>{user?.email}</span>
+                  <span>•</span>
+                  <span className="text-zinc-500 capitalize">{profile?.tier || 'developer'} tier</span>
+                </p>
+              </div>
+            </>
           )}
-          <div>
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-              {getGreeting()}, {userName}
-            </h1>
-            <p className="text-xs text-zinc-400 mt-0.5 font-mono flex items-center gap-2">
-              <span>{user?.email}</span>
-              <span>•</span>
-              <span className="text-zinc-500 capitalize">{profile?.tier || 'developer'} tier</span>
-            </p>
-          </div>
         </div>
 
         {/* Quick Navigation to Account & API Keys */}

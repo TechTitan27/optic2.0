@@ -39,8 +39,32 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const LOCAL_SESSION_KEY = 'optic_auth_user_session';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    try {
+      const stored = localStorage.getItem(LOCAL_SESSION_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.user && !parsed.user.id?.startsWith('usr_google_') && parsed.user.email !== 'alex.developer@optic.doy.best') {
+          return parsed.user;
+        }
+      }
+    } catch {}
+    return null;
+  });
+
+  const [profile, setProfile] = useState<UserProfile | null>(() => {
+    try {
+      const stored = localStorage.getItem(LOCAL_SESSION_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.profile && !parsed.user?.id?.startsWith('usr_google_') && parsed.user?.email !== 'alex.developer@optic.doy.best') {
+          return parsed.profile;
+        }
+      }
+    } catch {}
+    return null;
+  });
+
   const [session, setSession] = useState<Session | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);

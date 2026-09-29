@@ -19,12 +19,23 @@ const OrganizationContext = createContext<OrganizationContextType | undefined>(u
 const CURRENT_ORG_KEY = 'optic_current_org_id';
 
 export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [currentOrg, setCurrentOrgState] = useState<Organization | null>(null);
+  const [currentOrg, setCurrentOrgState] = useState<Organization | null>(() => {
+    try {
+      const savedOrg = localStorage.getItem('optic_current_org_data');
+      if (savedOrg) return JSON.parse(savedOrg);
+    } catch {}
+    return null;
+  });
   const [loading, setLoading] = useState<boolean>(true);
 
   const fetchOrgs = useCallback(async () => {
+    if (authLoading) {
+      setLoading(true);
+      return;
+    }
+
     if (!user?.id) {
       setOrganizations([]);
       setCurrentOrgState(null);
@@ -44,16 +55,20 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         const selected = matched || orgs[0];
         setCurrentOrgState(selected);
         localStorage.setItem(CURRENT_ORG_KEY, selected.id);
+        try {
+          localStorage.setItem('optic_current_org_data', JSON.stringify(selected));
+        } catch {}
       } else {
         setCurrentOrgState(null);
         localStorage.removeItem(CURRENT_ORG_KEY);
+        localStorage.removeItem('optic_current_org_data');
       }
     } catch (err) {
       console.warn('Error fetching organizations:', err);
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [user?.id, authLoading]);
 
   useEffect(() => {
     fetchOrgs();
@@ -63,6 +78,7 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setCurrentOrgState(org);
     try {
       localStorage.setItem(CURRENT_ORG_KEY, org.id);
+      localStorage.setItem('optic_current_org_data', JSON.stringify(org));
     } catch {
       // ignore
     }
@@ -80,12 +96,14 @@ export const OrganizationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return newOrg;
   };
 
+  const effectiveLoading = authLoading || loading;
+
   return (
     <OrganizationContext.Provider
       value={{
         organizations,
         currentOrg,
-        loading,
+        loading: effectiveLoading,
         setCurrentOrg,
         createOrg,
         refreshOrganizations: fetchOrgs,
