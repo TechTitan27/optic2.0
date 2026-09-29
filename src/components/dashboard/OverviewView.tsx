@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useOrganization } from '../../context/OrganizationContext';
 import { supabaseData } from '../../lib/supabaseData';
 import { ServiceStatus } from './ServiceStatus';
+import { UsageCardSkeleton, Skeleton } from '../common/Skeleton';
 import {
   HardDrive,
   Globe,
@@ -189,72 +190,81 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
       </div>
 
       {/* 4 Metric Cards loaded from real database usage */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Storage from `usage` table */}
-        <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
-              Storage Usage
-            </span>
-            <span className="text-[10px] font-mono text-sky-400">table: usage</span>
-          </div>
-          <div className="text-xl font-bold text-white tracking-tight">
-            {storageUsedGB} GB <span className="text-xs font-normal text-zinc-500">/ {storageLimitGB} GB</span>
-          </div>
-          <div className="mt-3 w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
-            <div
-              className="bg-sky-500 h-full rounded-full transition-all duration-500"
-              style={{ width: `${storagePct}%` }}
-            />
-          </div>
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <UsageCardSkeleton />
+          <UsageCardSkeleton />
+          <UsageCardSkeleton />
+          <UsageCardSkeleton />
         </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Storage from `usage` table */}
+          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
+                Storage Usage
+              </span>
+              <span className="text-[10px] font-mono text-sky-400">table: usage</span>
+            </div>
+            <div className="text-xl font-bold text-white tracking-tight">
+              {storageUsedGB} GB <span className="text-xs font-normal text-zinc-500">/ {storageLimitGB} GB</span>
+            </div>
+            <div className="mt-3 w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+              <div
+                className="bg-sky-500 h-full rounded-full transition-all duration-500"
+                style={{ width: `${storagePct}%` }}
+              />
+            </div>
+          </div>
 
-        {/* Bandwidth from `usage` table */}
-        <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
-              Bandwidth
-            </span>
-            <span className="text-[10px] font-mono text-emerald-400">active</span>
+          {/* Bandwidth from `usage` table */}
+          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
+                Bandwidth
+              </span>
+              <span className="text-[10px] font-mono text-emerald-400">active</span>
+            </div>
+            <div className="text-xl font-bold text-white tracking-tight">
+              {bandwidthUsedGB} GB <span className="text-xs font-normal text-zinc-500">/ {bandwidthLimitGB} GB</span>
+            </div>
+            <div className="mt-3 w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+              <div
+                className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                style={{ width: `${bandwidthPct}%` }}
+              />
+            </div>
           </div>
-          <div className="text-xl font-bold text-white tracking-tight">
-            {bandwidthUsedGB} GB <span className="text-xs font-normal text-zinc-500">/ {bandwidthLimitGB} GB</span>
-          </div>
-          <div className="mt-3 w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
-            <div
-              className="bg-emerald-500 h-full rounded-full transition-all duration-500"
-              style={{ width: `${bandwidthPct}%` }}
-            />
-          </div>
-        </div>
 
-        {/* Files tracked in Supabase */}
-        <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
-          <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-2 font-medium">
-            Stored Objects
-          </span>
-          <div className="text-xl font-bold text-white tracking-tight">
-            {recentFiles.length}{' '}
-            <span className="text-xs font-normal text-zinc-500">
-              {recentFiles.length === 1 ? 'file' : 'recent files'}
+          {/* Files tracked in Supabase */}
+          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
+            <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-2 font-medium">
+              Stored Objects
             </span>
+            <div className="text-xl font-bold text-white tracking-tight">
+              {recentFiles.length}{' '}
+              <span className="text-xs font-normal text-zinc-500">
+                {recentFiles.length === 1 ? 'file' : 'recent files'}
+              </span>
+            </div>
+            <p className="text-[11px] text-zinc-500 mt-3 font-mono">
+              {recentFiles.length > 0 ? 'Synced with Supabase' : 'No files in root'}
+            </p>
           </div>
-          <p className="text-[11px] text-zinc-500 mt-3 font-mono">
-            {recentFiles.length > 0 ? 'Synced with Supabase' : 'No files in root'}
-          </p>
-        </div>
 
-        {/* Deployments status */}
-        <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
-          <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-2 font-medium">
-            Deployments
-          </span>
-          <div className="text-xl font-bold text-white tracking-tight">
-            {recentDeployments.length} <span className="text-xs font-normal text-zinc-500">Active</span>
+          {/* Deployments status */}
+          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
+            <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-2 font-medium">
+              Deployments
+            </span>
+            <div className="text-xl font-bold text-white tracking-tight">
+              {recentDeployments.length} <span className="text-xs font-normal text-zinc-500">Active</span>
+            </div>
+            <p className="text-[11px] text-zinc-500 mt-3 font-mono">Production live</p>
           </div>
-          <p className="text-[11px] text-zinc-500 mt-3 font-mono">Production live</p>
         </div>
-      </div>
+      )}
 
       {/* Real-time Infrastructure Service Status */}
       <ServiceStatus onNavigateSurface={onNavigateSurface} />
@@ -328,7 +338,31 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 View in Cloud →
               </button>
             </div>
-            {recentFiles.length === 0 ? (
+            {loading ? (
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="w-3.5 h-3.5 rounded" />
+                    <Skeleton className="w-36 h-3.5" />
+                  </div>
+                  <Skeleton className="w-12 h-3" />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="w-3.5 h-3.5 rounded" />
+                    <Skeleton className="w-28 h-3.5" />
+                  </div>
+                  <Skeleton className="w-14 h-3" />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="w-3.5 h-3.5 rounded" />
+                    <Skeleton className="w-44 h-3.5" />
+                  </div>
+                  <Skeleton className="w-10 h-3" />
+                </div>
+              </div>
+            ) : recentFiles.length === 0 ? (
               <div className="py-6 text-center text-xs text-zinc-500 font-mono">
                 No files uploaded yet. Upload your first file in Cloud.
               </div>
@@ -360,18 +394,43 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 View in Hosting →
               </button>
             </div>
-            <div className="space-y-2.5">
-              {recentDeployments.map((d) => (
-                <div key={d.id} className="flex items-center justify-between text-xs font-mono">
-                  <div className="flex items-center gap-2 truncate pr-2">
-                    <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
-                    <span className="text-zinc-300 truncate">{d.projectName}</span>
-                    <span className="text-zinc-600">({d.commitHash})</span>
+            {loading ? (
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="w-3.5 h-3.5 rounded-full" />
+                    <Skeleton className="w-32 h-3.5" />
+                    <Skeleton className="w-16 h-3" />
                   </div>
-                  <span className="text-[11px] text-zinc-500 shrink-0">{d.environment}</span>
+                  <Skeleton className="w-14 h-3" />
                 </div>
-              ))}
-            </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="w-3.5 h-3.5 rounded-full" />
+                    <Skeleton className="w-40 h-3.5" />
+                    <Skeleton className="w-16 h-3" />
+                  </div>
+                  <Skeleton className="w-14 h-3" />
+                </div>
+              </div>
+            ) : recentDeployments.length === 0 ? (
+              <div className="py-6 text-center text-xs text-zinc-500 font-mono">
+                No deployments yet.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {recentDeployments.map((d) => (
+                  <div key={d.id} className="flex items-center justify-between text-xs font-mono">
+                    <div className="flex items-center gap-2 truncate pr-2">
+                      <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
+                      <span className="text-zinc-300 truncate">{d.projectName}</span>
+                      <span className="text-zinc-600">({d.commitHash})</span>
+                    </div>
+                    <span className="text-[11px] text-zinc-500 shrink-0">{d.environment}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

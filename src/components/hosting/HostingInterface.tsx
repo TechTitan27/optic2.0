@@ -813,10 +813,16 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
                         {selectedProject.productionDomain}
                       </a>
                     </div>
-                    {latestDep && (
+                    {loadingDeployments ? (
+                      <div className="flex items-center gap-2 pt-0.5">
+                        <Skeleton className="w-56 h-3.5" />
+                      </div>
+                    ) : latestDep ? (
                       <p className="text-xs text-zinc-400">
                         {latestDep.commitMessage || 'Manual deployment'} · Deployed {new Date(latestDep.createdAt).toLocaleString()} by {latestDep.creator || 'developer'}
                       </p>
+                    ) : (
+                      <p className="text-xs text-zinc-500">No deployments yet for this project</p>
                     )}
                   </div>
 
@@ -836,12 +842,17 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
                   </div>
                 </div>
 
-                {latestDep?.storagePath && (
+                {loadingDeployments ? (
+                  <div className="mt-4 pt-3 border-t border-zinc-800/80 flex items-center justify-between">
+                    <Skeleton className="w-48 h-3" />
+                    <Skeleton className="w-24 h-3" />
+                  </div>
+                ) : latestDep?.storagePath ? (
                   <div className="mt-4 pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs text-zinc-500 font-mono">
                     <span className="truncate">R2 Storage: {latestDep.storagePath}</span>
                     <span className="text-emerald-400 shrink-0 ml-2">Isolated Object Path</span>
                   </div>
-                )}
+                ) : null}
               </Card>
 
               {/* Project Stats */}

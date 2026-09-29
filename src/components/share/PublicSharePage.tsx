@@ -26,6 +26,7 @@ import { SurfaceType, SharedFileData } from '../../types';
 import { getShareTokenFromPath } from '../../lib/domainNavigation';
 import { OpticStorageService } from '../../lib/storageService';
 import { useToast } from '../../context/ToastContext';
+import { PublicShareSkeleton } from '../common/Skeleton';
 
 interface PublicSharePageProps {
   path: string;
@@ -352,11 +353,10 @@ export function PublicSharePage({ path, onNavigate }: PublicSharePageProps) {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 lg:p-8 flex flex-col justify-center">
-        {/* Loading State */}
+        {/* Loading State: Polished Skeleton preview matching final shared card and content */}
         {loading && (
-          <div className="flex flex-col items-center justify-center py-24 space-y-4">
-            <div className="w-10 h-10 rounded-full border-2 border-zinc-700 border-t-white animate-spin" />
-            <p className="text-sm font-medium text-zinc-400">Loading shared file...</p>
+          <div className="py-6 w-full">
+            <PublicShareSkeleton />
           </div>
         )}
 

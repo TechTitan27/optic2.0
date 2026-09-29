@@ -556,47 +556,51 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
       </div>
 
       {/* Storage Allocation Meter */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
-              Storage Allocation
-            </span>
-            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/40">Active Tier</span>
+      {loading ? (
+        <CloudStorageSectionSkeleton />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block font-medium">
+                Storage Allocation
+              </span>
+              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/40">Active Tier</span>
+            </div>
+            <div className="text-lg font-bold text-white tracking-tight">
+              {storageUsedGB} GB <span className="text-xs font-normal text-zinc-500">/ {storageLimitGB} GB</span>
+            </div>
+            <div className="mt-2.5 w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+              <div
+                className="bg-sky-500 h-full rounded-full transition-all duration-300"
+                style={{ width: `${storagePercent}%` }}
+              />
+            </div>
+            <div className="text-[10px] text-zinc-500 mt-2 font-mono flex justify-between">
+              <span>{storagePercent}% used</span>
+              <span>{files.length} active files</span>
+            </div>
           </div>
-          <div className="text-lg font-bold text-white tracking-tight">
-            {storageUsedGB} GB <span className="text-xs font-normal text-zinc-500">/ {storageLimitGB} GB</span>
-          </div>
-          <div className="mt-2.5 w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
-            <div
-              className="bg-sky-500 h-full rounded-full transition-all duration-300"
-              style={{ width: `${storagePercent}%` }}
-            />
-          </div>
-          <div className="text-[10px] text-zinc-500 mt-2 font-mono flex justify-between">
-            <span>{storagePercent}% used</span>
-            <span>{files.length} active files</span>
-          </div>
-        </div>
 
-        <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 col-span-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="text-sm font-semibold text-white">Direct Uploads</div>
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              Upload objects directly into your organization bucket with automatic chunking and instant shareable URLs.
-            </p>
+          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 col-span-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="text-sm font-semibold text-white">Direct Uploads</div>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Upload objects directly into your organization bucket with automatic chunking and instant shareable URLs.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setUploadModalOpen(true)}
+              icon={<Upload size={14} />}
+              className="text-xs shrink-0 self-start sm:self-auto"
+            >
+              Select Files
+            </Button>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setUploadModalOpen(true)}
-            icon={<Upload size={14} />}
-            className="text-xs shrink-0 self-start sm:self-auto"
-          >
-            Select Files
-          </Button>
         </div>
-      </div>
+      )}
 
         {/* Error message alert if query failed */}
         {errorMessage && (
@@ -818,6 +822,17 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
                 <p>{errorMessage}</p>
                 <Button size="sm" variant="outline" onClick={loadData} icon={<RefreshCw size={12} />}>
                   Retry
+                </Button>
+              </div>
+            ) : searchQuery.trim() && filteredFiles.length === 0 ? (
+              <div className="p-12 text-center text-xs text-zinc-400 font-mono space-y-3">
+                <Search size={22} className="text-zinc-500 mx-auto" />
+                <div className="space-y-1">
+                  <p className="font-semibold text-zinc-200">No results found for &ldquo;{searchQuery}&rdquo;</p>
+                  <p className="text-[11px] text-zinc-500">Check your spelling or navigate to another directory.</p>
+                </div>
+                <Button size="sm" variant="ghost" onClick={() => setSearchQuery('')}>
+                  Clear search query
                 </Button>
               </div>
             ) : filteredFiles.length === 0 && folders.length === 0 ? (

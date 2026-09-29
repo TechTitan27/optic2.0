@@ -8,6 +8,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useOrganization } from '../../context/OrganizationContext';
 import { getUserAvatarUrl } from '../../lib/avatar';
+import { AccountSettingsSkeleton } from '../common/Skeleton';
 import {
   User,
   Mail,
@@ -48,7 +49,7 @@ interface ActiveSessionItem {
 }
 
 export const SettingsView: React.FC = () => {
-  const { user, profile, updateProfile, signOut } = useAuth();
+  const { user, profile, updateProfile, signOut, loading: authLoading } = useAuth();
   const { currentOrg } = useOrganization();
   const toast = useToast();
 
@@ -354,6 +355,10 @@ export const SettingsView: React.FC = () => {
   const currentDisplayedAvatar =
     customAvatar ||
     getUserAvatarUrl(user ? { ...user, fullName, name: fullName } : { fullName, name: fullName });
+
+  if (authLoading && !profile && !user) {
+    return <AccountSettingsSkeleton />;
+  }
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-12">
