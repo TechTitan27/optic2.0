@@ -955,7 +955,6 @@ export const supabaseData = {
       slug,
       framework: input.framework || 'static',
       production_domain: productionDomain,
-      assigned_subdomain: subdomain,
       custom_domains: [],
       git_repo: input.gitRepo || null,
       git_branch: input.gitBranch || 'main',
@@ -979,47 +978,87 @@ export const supabaseData = {
       projectInsertPayload.description = input.description.trim();
     }
 
+    // Explicitly ensure assigned_subdomain is never included as it does not exist in public.projects
+    delete projectInsertPayload.assigned_subdomain;
+
     let projectData = null;
+    let currentPayload = { ...projectInsertPayload };
     let { data, error } = await sb
       .from('projects')
-      .insert(projectInsertPayload)
+      .insert(currentPayload)
       .select()
       .single();
 
-    if (error) {
-      console.warn('[Supabase] Initial insert into public.projects returned error, retrying with core columns:', error.message);
-      // If error is due to optional columns not present in the existing schema, adapt payload for public.projects
-      const adaptedPayload: any = {
+    // Self-healing schema loop: if any optional column is not present in public.projects schema cache,
+    // strip the missing column and retry immediately
+    let maxRetries = 8;
+    while (error && maxRetries > 0) {
+      maxRetries--;
+      const msg = error.message || '';
+      console.warn('[Supabase] Insert projects error attempt:', msg);
+
+      // Check if error is "Could not find the 'xyz' column of 'projects' in the schema cache"
+      const match = msg.match(/Could not find the '([^']+)' column/i);
+      if (match && match[1] && currentPayload[match[1]] !== undefined) {
+        const missingCol = match[1];
+        console.warn(`[Supabase] Stripping non-existent column '${missingCol}' from projects insert and retrying...`);
+        delete currentPayload[missingCol];
+        const res = await sb.from('projects').insert(currentPayload).select().single();
+        data = res.data;
+        error = res.error;
+        continue;
+      }
+
+      // Check if user_id or created_by caused an error
+      if (msg.includes('user_id') && currentPayload.user_id) {
+        delete currentPayload.user_id;
+        const res = await sb.from('projects').insert(currentPayload).select().single();
+        data = res.data;
+        error = res.error;
+        continue;
+      }
+      if (msg.includes('created_by') && currentPayload.created_by) {
+        delete currentPayload.created_by;
+        const res = await sb.from('projects').insert(currentPayload).select().single();
+        data = res.data;
+        error = res.error;
+        continue;
+      }
+
+      // Fallback: minimal standard columns
+      const minimalPayload: any = {
         organization_id: orgId,
         name: cleanName,
         slug,
-        framework: input.framework || 'static',
-        production_domain: productionDomain,
-        assigned_subdomain: subdomain,
-        status: 'ready',
       };
-      if (input.description?.trim()) adaptedPayload.description = input.description.trim();
-      if (verifiedUserId) adaptedPayload.user_id = verifiedUserId;
+      if (currentPayload.framework) minimalPayload.framework = currentPayload.framework;
+      if (currentPayload.description) minimalPayload.description = currentPayload.description;
+      if (verifiedUserId) minimalPayload.created_by = verifiedUserId;
 
-      let retryRes = await sb.from('projects').insert(adaptedPayload).select().single();
-      if (retryRes.error && (retryRes.error.message?.includes('user_id') || retryRes.error.message?.includes('does not exist'))) {
-        delete adaptedPayload.user_id;
-        if (verifiedUserId) adaptedPayload.created_by = verifiedUserId;
-        retryRes = await sb.from('projects').insert(adaptedPayload).select().single();
+      const fallbackRes = await sb.from('projects').insert(minimalPayload).select().single();
+      if (!fallbackRes.error && fallbackRes.data) {
+        data = fallbackRes.data;
+        error = null;
+        break;
+      } else if (fallbackRes.error?.message?.includes('created_by')) {
+        delete minimalPayload.created_by;
+        if (verifiedUserId) minimalPayload.user_id = verifiedUserId;
+        const res2 = await sb.from('projects').insert(minimalPayload).select().single();
+        if (!res2.error && res2.data) {
+          data = res2.data;
+          error = null;
+          break;
+        }
       }
-      if (retryRes.error && (retryRes.error.message?.includes('created_by') || retryRes.error.message?.includes('does not exist'))) {
-        delete adaptedPayload.created_by;
-        retryRes = await sb.from('projects').insert(adaptedPayload).select().single();
-      }
-
-      if (retryRes.error) {
-        console.error('[Supabase] Error inserting project into public.projects:', retryRes.error);
-        throw retryRes.error;
-      }
-      projectData = retryRes.data;
-    } else {
-      projectData = data;
+      break;
     }
+
+    if (error) {
+      console.error('[Supabase] Failed to insert project into public.projects:', error);
+      throw error;
+    }
+
+    projectData = data;
 
     const newProject: HostingProject = {
       id: projectData.id,

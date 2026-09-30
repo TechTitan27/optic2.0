@@ -106,8 +106,15 @@ export function getSurfaceUrl(surface: SurfaceType, path: string = '/'): string 
     switch (surface) {
       case 'cloud':
         return `https://cloud.optic.doy.best${path === '/cloud' ? '/' : path}`;
-      case 'hosting':
-        return `https://hosting.optic.doy.best${path === '/hosting' ? '/' : path}`;
+      case 'hosting': {
+        const cleanPath =
+          path === '/hosting'
+            ? '/'
+            : path.startsWith('/hosting/')
+            ? path.replace('/hosting', '')
+            : path;
+        return `https://hosting.optic.doy.best${cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`}`;
+      }
       case 'docs':
         return `https://docs.optic.doy.best${path === '/docs' ? '/' : path}`;
       case 'api':
@@ -326,6 +333,9 @@ export function resolveSurfaceState(): {
     if (pathname === '/signup' || pathname === '/register') {
       return { surface: 'signup', path: '/signup' };
     }
+    if (pathname === '/new' || pathname.startsWith('/new')) {
+      return { surface: 'hosting', path: '/new' };
+    }
     if (
       pathname === '/dashboard' ||
       pathname.startsWith('/dashboard/') ||
@@ -357,6 +367,10 @@ export function resolveSurfaceState(): {
     if (pathname === '/cloud' || pathname.startsWith('/cloud/')) {
       window.location.replace('https://cloud.optic.doy.best/');
       return { surface: 'cloud', path: '/' };
+    }
+    if (pathname === '/hosting/new') {
+      window.location.replace('https://hosting.optic.doy.best/new');
+      return { surface: 'hosting', path: '/new' };
     }
     if (pathname === '/hosting' || pathname.startsWith('/hosting/')) {
       window.location.replace('https://hosting.optic.doy.best/');
@@ -405,8 +419,11 @@ export function resolveSurfaceState(): {
   if (pathname.startsWith('/cloud') || pathname.startsWith('/storage')) {
     return { surface: 'cloud', path: '/cloud' };
   }
+  if (pathname === '/hosting/new' || pathname === '/new') {
+    return { surface: 'hosting', path: '/hosting/new' };
+  }
   if (pathname.startsWith('/hosting') || pathname.startsWith('/deploy')) {
-    return { surface: 'hosting', path: '/hosting' };
+    return { surface: 'hosting', path: pathname };
   }
   if (pathname.startsWith('/docs') || pathname.startsWith('/documentation')) {
     return { surface: 'docs', path: '/docs' };

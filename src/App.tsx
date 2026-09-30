@@ -116,7 +116,9 @@ function MainApp() {
           path === '/signup' ||
           path === '/auth/callback' ||
           path.startsWith('/s/') ||
-          path.startsWith('/share/')
+          path.startsWith('/share/') ||
+          path === '/new' ||
+          path.startsWith('/new')
             ? path
             : '/';
       } else {
@@ -126,9 +128,11 @@ function MainApp() {
           if (tab === 'keys') nextUrl = '/dashboard/keys';
           else if (tab === 'settings') nextUrl = '/dashboard/settings';
           else nextUrl = '/dashboard';
-        } else if (surface === 'cloud') nextUrl = '/cloud';
-        else if (surface === 'hosting') nextUrl = '/hosting';
-        else if (surface === 'docs') nextUrl = '/docs';
+        } else if (surface === 'cloud') {
+          nextUrl = '/cloud';
+        } else if (surface === 'hosting') {
+          nextUrl = path === '/new' || path === '/hosting/new' ? '/hosting/new' : '/hosting';
+        } else if (surface === 'docs') nextUrl = '/docs';
         else if (surface === 'api') nextUrl = '/api';
         else if (surface === 'privacy') nextUrl = '/privacy';
         else if (surface === 'terms') nextUrl = '/terms';
@@ -286,7 +290,10 @@ function MainApp() {
               currentSurface="hosting"
               onNavigateSurface={handleNavigateSurface}
             >
-              <HostingInterface onNavigateSurface={handleNavigateSurface} />
+              <HostingInterface
+                onNavigateSurface={handleNavigateSurface}
+                currentPath={currentPath}
+              />
             </DashboardLayout>
           </AuthGate>
         )}

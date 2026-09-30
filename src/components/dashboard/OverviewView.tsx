@@ -223,7 +223,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <Button
             size="sm"
             variant="primary"
-            onClick={() => onNavigateSurface('hosting', '/hosting')}
+            onClick={() => onNavigateSurface('hosting', '/hosting/new')}
             icon={<Plus size={14} />}
             className="text-xs"
           >

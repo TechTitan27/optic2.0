@@ -53,12 +53,17 @@ import {
   ChevronRight,
   ListFilter,
 } from 'lucide-react';
+import { NewProjectPage } from './NewProjectPage';
 
 interface HostingInterfaceProps {
   onNavigateSurface: (surface: SurfaceType, path?: string) => void;
+  currentPath?: string;
 }
 
-export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSurface }) => {
+export const HostingInterface: React.FC<HostingInterfaceProps> = ({
+  onNavigateSurface,
+  currentPath,
+}) => {
   const { user, profile } = useAuth();
   const { currentOrg, organizations, loading: orgLoading, createOrg, hasOrganizations } = useOrganization();
   const toast = useToast();
@@ -72,13 +77,20 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
   const [selectedProject, setSelectedProject] = useState<HostingProject | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'logs' | 'domains' | 'settings'>('overview');
 
-  // New Project modal state
-  const [createProjectModalOpen, setCreateProjectModalOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('');
-  const [newProjectSlug, setNewProjectSlug] = useState('');
-  const [newProjectDescription, setNewProjectDescription] = useState('');
-  const [newFramework, setNewFramework] = useState<'static' | 'react' | 'vite' | 'nextjs' | 'astro' | 'html'>('static');
-  const [creatingProject, setCreatingProject] = useState(false);
+  // Route navigation helper for New Project
+  const isSubdomain = typeof window !== 'undefined' && window.location.hostname.startsWith('hosting.');
+  const newProjectPath = isSubdomain ? '/new' : '/hosting/new';
+
+  const handleNavigateToNewProject = () => {
+    onNavigateSurface('hosting', newProjectPath);
+  };
+
+  const isNewProjectRoute =
+    currentPath === '/new' ||
+    currentPath === '/hosting/new' ||
+    (typeof window !== 'undefined' &&
+      (window.location.pathname === '/new' ||
+        window.location.pathname === '/hosting/new'));
 
   // First Visit Org Onboarding form state
   const [onboardOrgName, setOnboardOrgName] = useState('');
@@ -298,53 +310,6 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
 
     fetchLogs();
   }, [selectedDeploymentForLogs, deploymentsList]);
-
-  // Handler: Update new project slug dynamically when name changes
-  const handleProjectNameChange = (val: string) => {
-    setNewProjectName(val);
-    const generated = val
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
-    setNewProjectSlug(generated);
-  };
-
-  // Handler: Create Project
-  const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newProjectName.trim() || !currentOrg) return;
-    setCreatingProject(true);
-
-    try {
-      const cleanSlug =
-        newProjectSlug.trim()
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '') ||
-        newProjectName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
-
-      const newProj = await supabaseData.createHostingProject(currentOrg.id, {
-        name: newProjectName.trim(),
-        slug: cleanSlug,
-        description: newProjectDescription.trim() || undefined,
-        framework: newFramework,
-        creatorName: activeCreator,
-      });
-
-      setProjects((prev) => [newProj, ...prev]);
-      setNewProjectName('');
-      setNewProjectSlug('');
-      setNewProjectDescription('');
-      setCreateProjectModalOpen(false);
-      setSelectedProject(newProj);
-      setActiveTab('overview');
-      toast.success(`Project "${newProj.name}" created under ${currentOrg.name}.`, 'Hosting Project Ready');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to create project', 'Creation Error');
-    } finally {
-      setCreatingProject(false);
-    }
-  };
 
   // Handler: Folder selection for New Deployment
   const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -669,6 +634,23 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({ onNavigateSu
         );
     }
   };
+
+  // Dedicated Full-Page Route: hosting.optic.doy.best/new
+  if (isNewProjectRoute) {
+    return (
+      <NewProjectPage
+        onBackToHosting={() => {
+          onNavigateSurface('hosting', isSubdomain ? '/' : '/hosting');
+        }}
+        onProjectCreated={(newProject) => {
+          setProjects((prev) => [newProject, ...prev.filter((p) => p.id !== newProject.id)]);
+          setSelectedProject(newProject);
+          setActiveTab('overview');
+          onNavigateSurface('hosting', isSubdomain ? '/' : '/hosting');
+        }}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -1270,7 +1252,7 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
               <Button
                 size="sm"
                 variant="primary"
-                onClick={() => setCreateProjectModalOpen(true)}
+                onClick={handleNavigateToNewProject}
                 icon={<Plus size={14} />}
               >
                 Add New
@@ -1311,7 +1293,7 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
               <Button
                 size="sm"
                 variant="primary"
-                onClick={() => setCreateProjectModalOpen(true)}
+                onClick={handleNavigateToNewProject}
                 icon={<Plus size={14} />}
               >
                 Add New Project
@@ -1395,82 +1377,7 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
         </div>
       )}
 
-      {/* MODAL 1: Create Project Modal */}
-      <Modal
-        isOpen={createProjectModalOpen}
-        onClose={() => setCreateProjectModalOpen(false)}
-        title="Create New Hosting Project"
-        description={`Add a hosting project under organization "${currentOrg?.name || 'My Organization'}".`}
-      >
-        <form onSubmit={handleCreateProject} className="space-y-4">
-          <Input
-            label="Project Name"
-            placeholder="e.g. Acme Portfolio"
-            value={newProjectName}
-            onChange={(e) => handleProjectNameChange(e.target.value)}
-            required
-            autoFocus
-          />
-
-          <Input
-            label="Project Slug"
-            placeholder="e.g. acme-portfolio"
-            value={newProjectSlug}
-            onChange={(e) => setNewProjectSlug(e.target.value)}
-            required
-            hint={`Assigned production subdomain: ${newProjectSlug.trim() || '[slug]'}.optic.doy.best`}
-          />
-
-          <Input
-            label="Description (Optional)"
-            placeholder="e.g. Corporate landing page and documentation"
-            value={newProjectDescription}
-            onChange={(e) => setNewProjectDescription(e.target.value)}
-          />
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-zinc-300">Framework Preset</label>
-            <div className="grid grid-cols-3 gap-2 text-xs">
-              {(['static', 'react', 'vite', 'nextjs', 'astro', 'html'] as const).map((fw) => (
-                <button
-                  key={fw}
-                  type="button"
-                  onClick={() => setNewFramework(fw)}
-                  className={`p-2 rounded-lg border text-center capitalize transition-colors ${
-                    newFramework === fw
-                      ? 'border-indigo-500 bg-indigo-500/10 text-white font-semibold'
-                      : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
-                  }`}
-                >
-                  {fw}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setCreateProjectModalOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              loading={creatingProject}
-              disabled={!newProjectName.trim()}
-            >
-              Create Project
-            </Button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* MODAL 2: New Static Website Deployment Modal */}
+      {/* MODAL: New Static Website Deployment Modal */}
       <Modal
         isOpen={deployModalOpen}
         onClose={() => {
