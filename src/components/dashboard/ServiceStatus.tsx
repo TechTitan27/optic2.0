@@ -191,7 +191,7 @@ export const ServiceStatus: React.FC<ServiceStatusProps> = ({
       className={`rounded-xl border border-zinc-800/90 bg-zinc-900/40 p-4 sm:p-5 transition-all duration-200 ${className}`}
     >
       {/* Header Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-800/80">
+      <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${(!compact || expandedSection === 'all') ? 'pb-3 border-b border-zinc-800/80' : ''}`}>
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
             <Radio size={16} className="text-emerald-400 animate-pulse" />
@@ -240,111 +240,115 @@ export const ServiceStatus: React.FC<ServiceStatusProps> = ({
         </div>
       </div>
 
-      {/* High-Level Dual Infrastructure Summary Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 my-4">
-        {/* Cloud Storage Infrastructure Card */}
-        <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/50 p-3.5 flex flex-col justify-between">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-md bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-                <HardDrive size={15} />
+      {/* High-Level Dual Infrastructure Summary Grid & 30-day chart (hidden in compact mode unless expanded) */}
+      {(!compact || expandedSection === 'all') && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 my-4">
+            {/* Cloud Storage Infrastructure Card */}
+            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/50 p-3.5 flex flex-col justify-between">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-md bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+                    <HardDrive size={15} />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-zinc-200">Optic Cloud Storage</h4>
+                    <p className="text-[11px] font-mono text-zinc-400">S3 Gateway & Object Engine</p>
+                  </div>
+                </div>
+                <Badge variant="success" size="sm" dot>
+                  Operational
+                </Badge>
               </div>
-              <div>
-                <h4 className="text-xs font-semibold text-zinc-200">Optic Cloud Storage</h4>
-                <p className="text-[11px] font-mono text-zinc-400">S3 Gateway & Object Engine</p>
-              </div>
-            </div>
-            <Badge variant="success" size="sm" dot>
-              Operational
-            </Badge>
-          </div>
 
-          <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-zinc-900 font-mono text-center">
-            <div>
-              <span className="text-[10px] text-zinc-500 uppercase block">Latency</span>
-              <span className="text-xs font-semibold text-emerald-400">{avgCloudLatency}ms</span>
-            </div>
-            <div>
-              <span className="text-[10px] text-zinc-500 uppercase block">Uptime</span>
-              <span className="text-xs font-semibold text-zinc-200">99.99%</span>
-            </div>
-            <div>
-              <span className="text-[10px] text-zinc-500 uppercase block">Replication</span>
-              <span className="text-xs font-semibold text-sky-400">3x Edge</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Hosting Infrastructure Card */}
-        <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/50 p-3.5 flex flex-col justify-between">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-md bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-                <Globe size={15} />
-              </div>
-              <div>
-                <h4 className="text-xs font-semibold text-zinc-200">Optic Hosting Network</h4>
-                <p className="text-[11px] font-mono text-zinc-400">Edge CDN, Build & DNS</p>
+              <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-zinc-900 font-mono text-center">
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">Latency</span>
+                  <span className="text-xs font-semibold text-emerald-400">{avgCloudLatency}ms</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">Uptime</span>
+                  <span className="text-xs font-semibold text-zinc-200">99.99%</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">Replication</span>
+                  <span className="text-xs font-semibold text-sky-400">3x Edge</span>
+                </div>
               </div>
             </div>
-            <Badge variant="success" size="sm" dot>
-              Operational
-            </Badge>
+
+            {/* Hosting Infrastructure Card */}
+            <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/50 p-3.5 flex flex-col justify-between">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-md bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                    <Globe size={15} />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-zinc-200">Optic Hosting Network</h4>
+                    <p className="text-[11px] font-mono text-zinc-400">Edge CDN, Build & DNS</p>
+                  </div>
+                </div>
+                <Badge variant="success" size="sm" dot>
+                  Operational
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-zinc-900 font-mono text-center">
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">Avg TTFB</span>
+                  <span className="text-xs font-semibold text-emerald-400">{avgHostingLatency}ms</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">PoPs Active</span>
+                  <span className="text-xs font-semibold text-zinc-200">280+</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">Build Queue</span>
+                  <span className="text-xs font-semibold text-emerald-400">Instant (0s)</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-zinc-900 font-mono text-center">
-            <div>
-              <span className="text-[10px] text-zinc-500 uppercase block">Avg TTFB</span>
-              <span className="text-xs font-semibold text-emerald-400">{avgHostingLatency}ms</span>
+          {/* 30-Day Uptime Visual Heatmap / Sparkline */}
+          <div className="rounded-lg border border-zinc-800/70 bg-zinc-950/30 p-3 mb-4">
+            <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400 mb-2">
+              <span className="flex items-center gap-1.5">
+                <Activity size={12} className="text-emerald-400" />
+                30-Day Uptime Reliability
+              </span>
+              <span className="text-emerald-400 font-semibold">100% Availability</span>
             </div>
-            <div>
-              <span className="text-[10px] text-zinc-500 uppercase block">PoPs Active</span>
-              <span className="text-xs font-semibold text-zinc-200">280+</span>
+
+            {/* 30 Continuous Operational Blocks */}
+            <div className="flex gap-1 h-3.5 items-center">
+              {past30Days.map((day) => (
+                <div
+                  key={day.day}
+                  title={`Day ${day.day}: ${day.uptime}% uptime - No incidents recorded`}
+                  className="flex-1 h-full rounded-[2px] bg-emerald-500/80 hover:bg-emerald-400 transition-colors cursor-pointer"
+                />
+              ))}
             </div>
-            <div>
-              <span className="text-[10px] text-zinc-500 uppercase block">Build Queue</span>
-              <span className="text-xs font-semibold text-emerald-400">Instant (0s)</span>
+
+            <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mt-1.5">
+              <span>30 days ago</span>
+              <span className="flex items-center gap-2">
+                <span className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+                  Operational
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+                  Degraded
+                </span>
+              </span>
+              <span>Today</span>
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* 30-Day Uptime Visual Heatmap / Sparkline */}
-      <div className="rounded-lg border border-zinc-800/70 bg-zinc-950/30 p-3 mb-4">
-        <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400 mb-2">
-          <span className="flex items-center gap-1.5">
-            <Activity size={12} className="text-emerald-400" />
-            30-Day Uptime Reliability
-          </span>
-          <span className="text-emerald-400 font-semibold">100% Availability</span>
-        </div>
-
-        {/* 30 Continuous Operational Blocks */}
-        <div className="flex gap-1 h-3.5 items-center">
-          {past30Days.map((day) => (
-            <div
-              key={day.day}
-              title={`Day ${day.day}: ${day.uptime}% uptime - No incidents recorded`}
-              className="flex-1 h-full rounded-[2px] bg-emerald-500/80 hover:bg-emerald-400 transition-colors cursor-pointer"
-            />
-          ))}
-        </div>
-
-        <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mt-1.5">
-          <span>30 days ago</span>
-          <span className="flex items-center gap-2">
-            <span className="flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-              Operational
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
-              Degraded
-            </span>
-          </span>
-          <span>Today</span>
-        </div>
-      </div>
+        </>
+      )}
 
       {/* Expandable Breakdown of All Sub-Services */}
       {expandedSection === 'all' && (

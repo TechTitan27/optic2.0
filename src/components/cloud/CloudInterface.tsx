@@ -290,7 +290,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         }
 
         // 3. Only after R2 upload succeeds: INSERT into public.files
-        setUploadStatusText(`Registering file metadata in Supabase...`);
+        setUploadStatusText(`Registering file metadata...`);
         try {
           await supabaseData.insertFileRecord(userId, {
             name: file.name,

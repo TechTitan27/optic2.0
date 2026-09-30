@@ -275,23 +275,13 @@ export async function handleDeploymentRequest(
 
   // 5. Verify project and organization validity
   try {
-    let project: any = null;
     const { data: pData } = await sb
       .from('projects')
       .select('id, organization_id')
       .eq('id', deployment.project_id)
       .maybeSingle();
 
-    if (pData) {
-      project = pData;
-    } else {
-      const { data: hpData } = await sb
-        .from('hosting_projects')
-        .select('id, organization_id')
-        .eq('id', deployment.project_id)
-        .maybeSingle();
-      project = hpData;
-    }
+    const project = pData;
 
     if (!project || project.organization_id !== deployment.organization_id) {
       return sendHtmlPage(

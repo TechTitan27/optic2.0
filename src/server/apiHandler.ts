@@ -584,20 +584,14 @@ export async function handleApiRequest(
 
       if (sb && orgId) {
         try {
-          let { data, error } = await sb
+          const { data, error } = await sb
             .from('projects')
             .select('*')
             .eq('organization_id', orgId)
             .order('created_at', { ascending: false });
 
           if (error) {
-            console.warn('[API /api/hosting/projects] Warning querying projects, trying hosting_projects:', error.message);
-            const hpRes = await sb
-              .from('hosting_projects')
-              .select('*')
-              .eq('organization_id', orgId)
-              .order('created_at', { ascending: false });
-            data = hpRes.data;
+            console.error('[API /api/hosting/projects] Error querying public.projects:', error.message);
           }
 
           if (data) {

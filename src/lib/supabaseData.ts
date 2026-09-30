@@ -81,6 +81,7 @@ export const supabaseData = {
       return {
         ...defaultStats,
         storageUsedBytes: computedBytes,
+        filesCount: (userFiles || []).length,
       };
     } catch (err) {
       console.error('[Supabase] Unexpected exception in getUserUsage:', err);
@@ -811,7 +812,6 @@ export const supabaseData = {
 
     console.log('[Supabase] Querying public.projects for organization:', orgId);
 
-    let projectsData: any[] = [];
     const { data: pData, error: projErr } = await sb
       .from('projects')
       .select('*')
@@ -819,44 +819,23 @@ export const supabaseData = {
       .order('created_at', { ascending: false });
 
     if (projErr) {
-      console.warn('[Supabase] Warning querying public.projects, trying hosting_projects:', projErr.message);
-      const { data: hpData, error: hpErr } = await sb
-        .from('hosting_projects')
-        .select('*')
-        .eq('organization_id', orgId)
-        .order('created_at', { ascending: false });
-      if (hpErr) {
-        console.error('[Supabase] Error querying hosting_projects:', hpErr);
-        throw hpErr;
-      }
-      projectsData = hpData || [];
-    } else {
-      projectsData = pData || [];
+      console.error('[Supabase] Error querying public.projects:', projErr);
+      throw projErr;
     }
 
-    // Also fetch latest deployment for each project to show live status & times
+    const projectsData = pData || [];
+
+    // Also fetch latest deployment for each project from public.deployments
     let deploymentsByProject: Record<string, DeploymentItem> = {};
     try {
-      let depsData: any[] = [];
-      const { data: dData, error: dErr } = await sb
+      const { data: dData } = await sb
         .from('deployments')
         .select('*')
         .eq('organization_id', orgId)
         .order('created_at', { ascending: false });
 
-      if (dErr) {
-        const { data: hdData } = await sb
-          .from('hosting_deployments')
-          .select('*')
-          .eq('organization_id', orgId)
-          .order('created_at', { ascending: false });
-        depsData = hdData || [];
-      } else {
-        depsData = dData || [];
-      }
-
-      if (depsData) {
-        for (const d of depsData) {
+      if (dData) {
+        for (const d of dData) {
           if (!deploymentsByProject[d.project_id]) {
             deploymentsByProject[d.project_id] = {
               id: d.id,
@@ -931,6 +910,7 @@ export const supabaseData = {
       gitRepo?: string;
       gitBranch?: string;
       creatorName?: string;
+      userId?: string;
       buildCommand?: string;
       outputDirectory?: string;
       packageManager?: string;
@@ -965,6 +945,10 @@ export const supabaseData = {
       packageManager: input.packageManager,
     });
 
+    // Resolve authenticated user to preserve creator/user relationship and satisfy RLS
+    const { data: authData } = await sb.auth.getUser();
+    const verifiedUserId = authData?.user?.id || input.userId;
+
     const projectInsertPayload: any = {
       organization_id: orgId,
       name: cleanName,
@@ -977,6 +961,11 @@ export const supabaseData = {
       git_branch: input.gitBranch || 'main',
       status: 'ready',
     };
+
+    if (verifiedUserId) {
+      projectInsertPayload.user_id = verifiedUserId;
+      projectInsertPayload.created_by = verifiedUserId;
+    }
 
     if (input.buildCommand) projectInsertPayload.build_command = input.buildCommand;
     if (input.outputDirectory) projectInsertPayload.output_directory = input.outputDirectory;
@@ -998,63 +987,36 @@ export const supabaseData = {
       .single();
 
     if (error) {
-      // If error might be due to optional columns not yet migrated, try stripped payload
-      if (error.message?.includes('column') || error.message?.includes('does not exist')) {
-        const strippedPayload = {
-          organization_id: orgId,
-          name: cleanName,
-          slug,
-          framework: input.framework || 'static',
-          production_domain: productionDomain,
-          assigned_subdomain: subdomain,
-          custom_domains: [],
-          git_repo: input.gitRepo || null,
-          git_branch: input.gitBranch || 'main',
-          status: 'ready',
-          description: input.description?.trim() || undefined,
-        };
-        const strippedRes = await sb.from('projects').insert(strippedPayload).select().single();
-        if (!strippedRes.error) {
-          data = strippedRes.data;
-          error = null;
-        }
+      console.warn('[Supabase] Initial insert into public.projects returned error, retrying with core columns:', error.message);
+      // If error is due to optional columns not present in the existing schema, adapt payload for public.projects
+      const adaptedPayload: any = {
+        organization_id: orgId,
+        name: cleanName,
+        slug,
+        framework: input.framework || 'static',
+        production_domain: productionDomain,
+        assigned_subdomain: subdomain,
+        status: 'ready',
+      };
+      if (input.description?.trim()) adaptedPayload.description = input.description.trim();
+      if (verifiedUserId) adaptedPayload.user_id = verifiedUserId;
+
+      let retryRes = await sb.from('projects').insert(adaptedPayload).select().single();
+      if (retryRes.error && (retryRes.error.message?.includes('user_id') || retryRes.error.message?.includes('does not exist'))) {
+        delete adaptedPayload.user_id;
+        if (verifiedUserId) adaptedPayload.created_by = verifiedUserId;
+        retryRes = await sb.from('projects').insert(adaptedPayload).select().single();
       }
-    }
-
-    if (error) {
-      console.warn('[Supabase] Warning inserting into public.projects, trying hosting_projects:', error.message);
-      let { data: hpData, error: hpErr } = await sb
-        .from('hosting_projects')
-        .insert(projectInsertPayload)
-        .select()
-        .single();
-
-      if (hpErr && (hpErr.message?.includes('column') || hpErr.message?.includes('does not exist'))) {
-        const strippedHpPayload = {
-          organization_id: orgId,
-          name: cleanName,
-          slug,
-          framework: input.framework || 'static',
-          production_domain: productionDomain,
-          assigned_subdomain: subdomain,
-          custom_domains: [],
-          git_repo: input.gitRepo || null,
-          git_branch: input.gitBranch || 'main',
-          status: 'ready',
-          description: input.description?.trim() || undefined,
-        };
-        const strippedHpRes = await sb.from('hosting_projects').insert(strippedHpPayload).select().single();
-        if (!strippedHpRes.error) {
-          hpData = strippedHpRes.data;
-          hpErr = null;
-        }
+      if (retryRes.error && (retryRes.error.message?.includes('created_by') || retryRes.error.message?.includes('does not exist'))) {
+        delete adaptedPayload.created_by;
+        retryRes = await sb.from('projects').insert(adaptedPayload).select().single();
       }
 
-      if (hpErr) {
-        console.error('[Supabase] Error inserting project into hosting_projects:', hpErr);
-        throw hpErr;
+      if (retryRes.error) {
+        console.error('[Supabase] Error inserting project into public.projects:', retryRes.error);
+        throw retryRes.error;
       }
-      projectData = hpData;
+      projectData = retryRes.data;
     } else {
       projectData = data;
     }
@@ -1105,16 +1067,8 @@ export const supabaseData = {
       .eq('organization_id', orgId);
 
     if (error) {
-      console.warn('[Supabase] Note deleting from public.projects, trying hosting_projects:', error.message);
-      const { error: hpErr } = await sb
-        .from('hosting_projects')
-        .delete()
-        .eq('id', projectId)
-        .eq('organization_id', orgId);
-      if (hpErr) {
-        console.error('[Supabase] Error deleting project from hosting_projects:', hpErr);
-        throw hpErr;
-      }
+      console.error('[Supabase] Error deleting project from public.projects:', error);
+      throw error;
     }
   },
 
@@ -1136,23 +1090,11 @@ export const supabaseData = {
       query = query.eq('organization_id', orgId);
     }
 
-    let { data, error } = await query.order('created_at', { ascending: false });
+    const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) {
-      console.warn('[Supabase] Warning querying public.deployments, trying hosting_deployments:', error.message);
-      let hQuery = sb
-        .from('hosting_deployments')
-        .select('*')
-        .eq('project_id', projectId);
-      if (orgId) {
-        hQuery = hQuery.eq('organization_id', orgId);
-      }
-      const hRes = await hQuery.order('created_at', { ascending: false });
-      if (hRes.error) {
-        console.error('[Supabase] Error querying hosting_deployments:', hRes.error);
-        throw hRes.error;
-      }
-      data = hRes.data;
+      console.error('[Supabase] Error querying public.deployments:', error);
+      throw error;
     }
 
     return (data || []).map((d: any) => ({

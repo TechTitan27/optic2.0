@@ -205,4 +205,5 @@ export interface UsageStats {
   deploymentsLimit: number;
   apiRequestsThisMonth: number;
   apiRequestsLimit: number;
+  filesCount?: number;
 }

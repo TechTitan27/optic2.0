@@ -116,19 +116,14 @@ export default async function handler(req: any, res: any) {
       const orgId = req.query?.orgId;
 
       if (sb && orgId) {
-        let { data, error } = await sb
+        const { data, error } = await sb
           .from('projects')
           .select('*')
           .eq('organization_id', orgId)
           .order('created_at', { ascending: false });
 
         if (error) {
-          const hpRes = await sb
-            .from('hosting_projects')
-            .select('*')
-            .eq('organization_id', orgId)
-            .order('created_at', { ascending: false });
-          data = hpRes.data;
+          console.error('[API /api/hosting?action=projects] Error querying public.projects:', error.message);
         }
 
         if (data) {
