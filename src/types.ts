@@ -97,14 +97,14 @@ export interface Organization {
   created_by: string;
   created_at: string;
   avatarUrl?: string;
-  role?: 'owner' | 'admin' | 'member';
+  role?: 'owner' | 'member';
 }
 
 export interface OrganizationMember {
   id: string;
   organization_id: string;
   user_id: string;
-  role: 'owner' | 'admin' | 'member';
+  role: 'owner' | 'member';
   created_at: string;
   user?: UserProfile;
 }

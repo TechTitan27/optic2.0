@@ -185,9 +185,7 @@ export async function handleApiRequest(
         .insert({
           user_id: userId,
           name,
-          key_prefix: keyPrefix,
           key_hash: keyHash,
-          status: 'active',
         })
         .select()
         .single();
@@ -206,7 +204,7 @@ export async function handleApiRequest(
           id: data.id,
           name: data.name,
           rawKey, // returned ONLY once
-          keyPrefix: data.key_prefix,
+          keyPrefix,
           createdAt: data.created_at,
         },
       });
@@ -234,11 +232,11 @@ export async function handleApiRequest(
         });
       }
 
-      // Select only non-sensitive columns: id, name, key_prefix, status, created_at, last_used_at
+      // STRICT: select only existing columns: id, name, created_at, last_used_at
       // NEVER select or return key_hash
       const { data, error } = await sb
         .from('api_keys')
-        .select('id, name, key_prefix, status, created_at, last_used_at')
+        .select('id, name, created_at, last_used_at')
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
 
@@ -253,8 +251,8 @@ export async function handleApiRequest(
       const keys = (data || []).map((k: any) => ({
         id: k.id,
         name: k.name,
-        keyPrefix: k.key_prefix,
-        status: k.status,
+        keyPrefix: `opt_live_${k.id.substring(0, 8)}...`,
+        status: 'active',
         createdAt: k.created_at,
         lastUsedAt: k.last_used_at,
       }));
@@ -286,9 +284,10 @@ export async function handleApiRequest(
         return sendJson(res, 500, { success: false, error: 'Supabase server client unavailable.' });
       }
 
+      // Since api_keys schema has no status column, revoking deletes the key record
       const { error } = await sb
         .from('api_keys')
-        .update({ status: 'revoked' })
+        .delete()
         .eq('id', id)
         .eq('user_id', userId);
 
@@ -452,16 +451,7 @@ export async function handleApiRequest(
 
           let { data, error } = await query;
           if (error) {
-            console.warn('[API /api/hosting/deployments] Warning from deployments table, trying hosting_deployments:', error.message);
-            let hQuery = sb.from('hosting_deployments').select('*').order('created_at', { ascending: false });
-            if (projectId) {
-              hQuery = hQuery.eq('project_id', projectId);
-            }
-            if (orgId) {
-              hQuery = hQuery.eq('organization_id', orgId);
-            }
-            const hRes = await hQuery;
-            data = hRes.data;
+            console.error('[API /api/hosting/deployments] Error querying deployments:', error.message);
           }
 
           if (data) {
@@ -773,13 +763,12 @@ export async function handleApiRequest(
         try {
           const { data: profile } = await sb
             .from('profiles')
-            .select('id, display_name, full_name, name')
+            .select('id, full_name, avatar_url')
             .eq('id', file.user_id)
             .maybeSingle();
 
           if (profile) {
-            uploaderName =
-              profile.display_name || profile.full_name || profile.name || 'Optic User';
+            uploaderName = profile.full_name || 'Optic User';
           }
         } catch (pErr) {
           console.warn('[API /api/storage/share] Profile query warning:', pErr);

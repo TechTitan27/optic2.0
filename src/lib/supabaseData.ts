@@ -61,18 +61,13 @@ export const supabaseData = {
         0
       );
 
-      // Attempt to sync computed storage into usage table
+      // Attempt to sync computed storage into usage table using only real columns: user_id, storage_bytes, bandwidth_bytes, updated_at
       try {
         await sb.from('usage').upsert({
           user_id: userId,
-          storage_used_bytes: computedBytes,
-          storage_limit_bytes: defaultStats.storageLimitBytes,
-          bandwidth_used_bytes: 0,
-          bandwidth_limit_bytes: defaultStats.bandwidthLimitBytes,
-          deployments_this_month: 1,
-          deployments_limit: defaultStats.deploymentsLimit,
-          api_requests_this_month: 0,
-          api_requests_limit: defaultStats.apiRequestsLimit,
+          storage_bytes: computedBytes,
+          bandwidth_bytes: 0,
+          updated_at: new Date().toISOString(),
         });
       } catch (upsertErr) {
         // Non-blocking sync warning
@@ -384,7 +379,7 @@ export const supabaseData = {
       storage_provider: input.storageProvider,
     });
 
-    const canonicalPayload: any = {
+    const canonicalPayload = {
       user_id: userId,
       folder_id: input.folderId || null,
       name: input.name,
@@ -393,67 +388,32 @@ export const supabaseData = {
       size_bytes: input.sizeBytes,
     };
 
-    let { data, error } = await sb
+    const { data, error } = await sb
       .from('files')
-      .insert({
-        ...canonicalPayload,
-        extension: input.extension,
-        storage_provider: input.storageProvider,
-        public_url: input.publicUrl,
-        is_public: input.isPublic ?? false,
-      })
+      .insert(canonicalPayload)
       .select()
       .single();
-
-    if (error && error.message && error.message.includes('column')) {
-      // Retry with strictly canonical public.files schema
-      const retry = await sb
-        .from('files')
-        .insert(canonicalPayload)
-        .select()
-        .single();
-      data = retry.data;
-      error = retry.error;
-    }
 
     if (error) {
       console.error('[Supabase] Error inserting file metadata into public.files:', error);
       throw error;
     }
 
-    // Update usage table storage count
+    // Update usage table storage count using exact columns: user_id, storage_bytes, bandwidth_bytes, updated_at
     try {
-      const { data: usageRow, error: uFetchErr } = await sb
+      const { data: usageRow } = await sb
         .from('usage')
-        .select('id, storage_used_bytes')
+        .select('user_id, storage_bytes')
         .eq('user_id', userId)
         .maybeSingle();
 
-      if (uFetchErr) {
-        console.warn('[Supabase] Usage lookup warning:', uFetchErr);
-      }
-
-      if (usageRow) {
-        const updatedBytes = Math.max(0, (Number(usageRow.storage_used_bytes) || 0) + input.sizeBytes);
-        const { error: uUpErr } = await sb
-          .from('usage')
-          .update({ storage_used_bytes: updatedBytes })
-          .eq('id', usageRow.id);
-        if (uUpErr) console.warn('[Supabase] Usage update warning:', uUpErr);
-      } else {
-        const { error: uInErr } = await sb.from('usage').insert({
-          user_id: userId,
-          storage_used_bytes: input.sizeBytes,
-          storage_limit_bytes: 10 * 1024 * 1024 * 1024,
-          bandwidth_used_bytes: 0,
-          bandwidth_limit_bytes: 50 * 1024 * 1024 * 1024,
-          deployments_this_month: 1,
-          deployments_limit: 100,
-          api_requests_this_month: 0,
-          api_requests_limit: 100000,
-        });
-        if (uInErr) console.warn('[Supabase] Usage insert warning:', uInErr);
-      }
+      const newStorageBytes = Math.max(0, (Number(usageRow?.storage_bytes) || 0) + input.sizeBytes);
+      await sb.from('usage').upsert({
+        user_id: userId,
+        storage_bytes: newStorageBytes,
+        bandwidth_bytes: 0,
+        updated_at: new Date().toISOString(),
+      });
     } catch (uErr) {
       console.warn('[Supabase] Usage stats update notification:', uErr);
     }
@@ -461,16 +421,16 @@ export const supabaseData = {
     return {
       id: data.id,
       name: data.name,
-      extension: data.extension,
+      extension: input.extension,
       mimeType: data.mime_type,
       sizeBytes: Number(data.size_bytes),
       folderId: data.folder_id,
       storageKey: data.storage_key,
-      storageProvider: data.storage_provider,
-      publicUrl: data.public_url,
+      storageProvider: input.storageProvider,
+      publicUrl: input.publicUrl,
       createdAt: data.created_at,
       updatedAt: data.updated_at || data.created_at,
-      isPublic: data.is_public,
+      isPublic: input.isPublic ?? true,
     };
   },
 
@@ -497,21 +457,24 @@ export const supabaseData = {
       throw error;
     }
 
-    // Decrement usage
+    // Decrement usage using exact columns: storage_bytes, updated_at
     if (sizeBytes > 0) {
       try {
         const { data: usageRow } = await sb
           .from('usage')
-          .select('id, storage_used_bytes')
+          .select('user_id, storage_bytes')
           .eq('user_id', userId)
           .maybeSingle();
 
         if (usageRow) {
-          const updatedBytes = Math.max(0, (Number(usageRow.storage_used_bytes) || 0) - sizeBytes);
+          const updatedBytes = Math.max(0, (Number(usageRow.storage_bytes) || 0) - sizeBytes);
           await sb
             .from('usage')
-            .update({ storage_used_bytes: updatedBytes })
-            .eq('id', usageRow.id);
+            .update({
+              storage_bytes: updatedBytes,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', userId);
         }
       } catch (uErr) {
         console.warn('[Supabase] Usage decrement notification:', uErr);
@@ -868,7 +831,6 @@ export const supabaseData = {
       const prodDomain =
         latestDep?.deploymentUrl ||
         latestDep?.url ||
-        p.production_domain ||
         (latestDep?.id ? `/api/deployments/${latestDep.id}/` : `https://${p.slug}.optic.doy.best`);
       return {
         id: p.id,
@@ -876,20 +838,12 @@ export const supabaseData = {
         name: p.name,
         slug: p.slug,
         description: p.description || undefined,
-        framework: p.framework || 'react',
-        buildCommand: p.build_command || p.buildConfig?.buildCommand || undefined,
-        outputDirectory: p.output_directory || p.buildConfig?.outputDirectory || undefined,
-        packageManager: p.package_manager || p.buildConfig?.packageManager || undefined,
-        nodeVersion: p.node_version || p.buildConfig?.nodeVersion || undefined,
-        installCommand: p.install_command || p.buildConfig?.installCommand || undefined,
-        rootDirectory: p.root_directory || p.buildConfig?.rootDirectory || undefined,
-        buildConfig: p.build_config || undefined,
+        framework: 'react',
         productionDomain: prodDomain,
-        assignedSubdomain: p.assigned_subdomain || `${p.slug}.optic.doy.best`,
-        customDomains: p.custom_domains || [],
-        gitRepo: p.git_repo || undefined,
-        gitBranch: p.git_branch || 'main',
-        status: (latestDep?.status as any) || p.status || 'ready',
+        assignedSubdomain: `${p.slug}.optic.doy.best`,
+        customDomains: [],
+        gitBranch: 'main',
+        status: (latestDep?.status as any) || 'ready',
         latestDeployment: latestDep,
         createdAt: p.created_at || new Date().toISOString(),
         updatedAt: latestDep?.createdAt || p.updated_at || new Date().toISOString(),
@@ -899,6 +853,7 @@ export const supabaseData = {
 
   /**
    * Create a new hosting project under an organization in `public.projects`
+   * Canonical public.projects schema: user_id, organization_id, name, slug, description
    */
   async createHostingProject(
     orgId: string,
@@ -935,153 +890,68 @@ export const supabaseData = {
     const subdomain = `${slug}.optic.doy.best`;
     const productionDomain = `https://${subdomain}`;
 
-    console.log('[Supabase] Inserting project into public.projects:', {
-      organization_id: orgId,
-      name: cleanName,
-      slug,
-      framework: input.framework || 'static',
-      buildCommand: input.buildCommand,
-      outputDirectory: input.outputDirectory,
-      packageManager: input.packageManager,
-    });
-
-    // Resolve authenticated user to preserve creator/user relationship and satisfy RLS
+    // Resolve authenticated user to satisfy RLS and assign user_id
     const { data: authData } = await sb.auth.getUser();
     const verifiedUserId = authData?.user?.id || input.userId;
 
-    const projectInsertPayload: any = {
+    if (!verifiedUserId) {
+      throw new Error('You must be signed in to create a hosting project.');
+    }
+
+    // STRICT: INSERT into public.projects using ONLY authoritative columns:
+    // user_id, organization_id, name, slug, description
+    const projectInsertPayload: {
+      user_id: string;
+      organization_id: string;
+      name: string;
+      slug: string;
+      description?: string;
+    } = {
+      user_id: verifiedUserId,
       organization_id: orgId,
       name: cleanName,
       slug,
-      framework: input.framework || 'static',
-      production_domain: productionDomain,
-      custom_domains: [],
-      git_repo: input.gitRepo || null,
-      git_branch: input.gitBranch || 'main',
-      status: 'ready',
     };
 
-    if (verifiedUserId) {
-      projectInsertPayload.user_id = verifiedUserId;
-      projectInsertPayload.created_by = verifiedUserId;
-    }
-
-    if (input.buildCommand) projectInsertPayload.build_command = input.buildCommand;
-    if (input.outputDirectory) projectInsertPayload.output_directory = input.outputDirectory;
-    if (input.packageManager) projectInsertPayload.package_manager = input.packageManager;
-    if (input.nodeVersion) projectInsertPayload.node_version = input.nodeVersion;
-    if (input.installCommand) projectInsertPayload.install_command = input.installCommand;
-    if (input.rootDirectory) projectInsertPayload.root_directory = input.rootDirectory;
-    if (input.buildConfig) projectInsertPayload.build_config = input.buildConfig;
-
-    if (input.description) {
+    if (input.description && input.description.trim()) {
       projectInsertPayload.description = input.description.trim();
     }
 
-    // Explicitly ensure assigned_subdomain is never included as it does not exist in public.projects
-    delete projectInsertPayload.assigned_subdomain;
+    console.log('[Supabase] Inserting project into public.projects:', projectInsertPayload);
 
-    let projectData = null;
-    let currentPayload = { ...projectInsertPayload };
-    let { data, error } = await sb
+    const { data: projectData, error } = await sb
       .from('projects')
-      .insert(currentPayload)
+      .insert(projectInsertPayload)
       .select()
       .single();
-
-    // Self-healing schema loop: if any optional column is not present in public.projects schema cache,
-    // strip the missing column and retry immediately
-    let maxRetries = 8;
-    while (error && maxRetries > 0) {
-      maxRetries--;
-      const msg = error.message || '';
-      console.warn('[Supabase] Insert projects error attempt:', msg);
-
-      // Check if error is "Could not find the 'xyz' column of 'projects' in the schema cache"
-      const match = msg.match(/Could not find the '([^']+)' column/i);
-      if (match && match[1] && currentPayload[match[1]] !== undefined) {
-        const missingCol = match[1];
-        console.warn(`[Supabase] Stripping non-existent column '${missingCol}' from projects insert and retrying...`);
-        delete currentPayload[missingCol];
-        const res = await sb.from('projects').insert(currentPayload).select().single();
-        data = res.data;
-        error = res.error;
-        continue;
-      }
-
-      // Check if user_id or created_by caused an error
-      if (msg.includes('user_id') && currentPayload.user_id) {
-        delete currentPayload.user_id;
-        const res = await sb.from('projects').insert(currentPayload).select().single();
-        data = res.data;
-        error = res.error;
-        continue;
-      }
-      if (msg.includes('created_by') && currentPayload.created_by) {
-        delete currentPayload.created_by;
-        const res = await sb.from('projects').insert(currentPayload).select().single();
-        data = res.data;
-        error = res.error;
-        continue;
-      }
-
-      // Fallback: minimal standard columns
-      const minimalPayload: any = {
-        organization_id: orgId,
-        name: cleanName,
-        slug,
-      };
-      if (currentPayload.framework) minimalPayload.framework = currentPayload.framework;
-      if (currentPayload.description) minimalPayload.description = currentPayload.description;
-      if (verifiedUserId) minimalPayload.created_by = verifiedUserId;
-
-      const fallbackRes = await sb.from('projects').insert(minimalPayload).select().single();
-      if (!fallbackRes.error && fallbackRes.data) {
-        data = fallbackRes.data;
-        error = null;
-        break;
-      } else if (fallbackRes.error?.message?.includes('created_by')) {
-        delete minimalPayload.created_by;
-        if (verifiedUserId) minimalPayload.user_id = verifiedUserId;
-        const res2 = await sb.from('projects').insert(minimalPayload).select().single();
-        if (!res2.error && res2.data) {
-          data = res2.data;
-          error = null;
-          break;
-        }
-      }
-      break;
-    }
 
     if (error) {
       console.error('[Supabase] Failed to insert project into public.projects:', error);
       throw error;
     }
 
-    projectData = data;
-
     const newProject: HostingProject = {
       id: projectData.id,
       organization_id: projectData.organization_id || orgId,
       name: projectData.name,
       slug: projectData.slug,
-      description: projectData.description,
-      framework: projectData.framework,
-      buildCommand: projectData.build_command || input.buildCommand,
-      outputDirectory: projectData.output_directory || input.outputDirectory,
-      packageManager: projectData.package_manager || input.packageManager,
-      nodeVersion: projectData.node_version || input.nodeVersion,
-      installCommand: projectData.install_command || input.installCommand,
-      rootDirectory: projectData.root_directory || input.rootDirectory,
-      buildConfig: projectData.build_config || input.buildConfig,
-      productionDomain: projectData.production_domain || productionDomain,
-      assignedSubdomain: projectData.assigned_subdomain || subdomain,
-      customDomains: projectData.custom_domains || [],
-      gitRepo: projectData.git_repo || undefined,
-      gitBranch: projectData.git_branch || 'main',
-      status: projectData.status || 'ready',
-      createdAt: projectData.created_at,
-      updatedAt: projectData.updated_at,
+      description: projectData.description || undefined,
+      framework: input.framework || 'react',
+      buildCommand: input.buildCommand,
+      outputDirectory: input.outputDirectory,
+      packageManager: input.packageManager,
+      nodeVersion: input.nodeVersion,
+      installCommand: input.installCommand,
+      rootDirectory: input.rootDirectory,
+      buildConfig: input.buildConfig,
+      productionDomain,
+      assignedSubdomain: subdomain,
+      customDomains: [],
+      gitRepo: input.gitRepo,
+      gitBranch: input.gitBranch || 'main',
+      status: 'ready',
+      createdAt: projectData.created_at || new Date().toISOString(),
+      updatedAt: projectData.updated_at || projectData.created_at || new Date().toISOString(),
     };
 
     return newProject;
@@ -1175,88 +1045,68 @@ export const supabaseData = {
     buildCommand?: string;
     outputDirectory?: string;
     packageManager?: string;
+    completedAt?: string;
   }): Promise<DeploymentItem> {
     const sb = getSupabase();
     if (!sb) {
       throw new Error('Supabase client is not available.');
     }
 
-    const deploymentId = params.id || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15));
+    const deploymentId =
+      params.id ||
+      (typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : Math.random().toString(36).substring(2, 15));
+
+    let finalUserId = params.userId;
+    if (!finalUserId) {
+      const { data: authData } = await sb.auth.getUser();
+      finalUserId = authData?.user?.id || '';
+    }
 
     console.log('[Supabase] Creating deployment record in public.deployments:', {
       id: deploymentId,
       project_id: params.projectId,
       organization_id: params.organizationId,
       status: params.status,
-      framework: params.framework,
     });
 
-    const payload: any = {
+    // STRICT: public.deployments schema has:
+    // id, project_id, user_id, organization_id, status, deployment_url, storage_path, created_at, completed_at
+    const payload: {
+      id: string;
+      project_id: string;
+      organization_id: string;
+      user_id?: string;
+      status: string;
+      deployment_url: string;
+      storage_path: string;
+      completed_at?: string;
+    } = {
       id: deploymentId,
       project_id: params.projectId,
       organization_id: params.organizationId,
-      user_id: params.userId,
       status: params.status,
       deployment_url: params.deploymentUrl,
-      url: params.deploymentUrl,
       storage_path: params.storagePath,
-      commit_message: params.commitMessage || 'Manual deployment',
-      creator: params.creator || 'developer',
-      branch: params.branch || 'main',
-      environment: 'production',
     };
 
-    if (params.framework) payload.framework = params.framework;
-    if (params.buildCommand) payload.build_command = params.buildCommand;
-    if (params.outputDirectory) payload.output_directory = params.outputDirectory;
-    if (params.packageManager) payload.package_manager = params.packageManager;
+    if (finalUserId) {
+      payload.user_id = finalUserId;
+    }
+    if (params.completedAt) {
+      payload.completed_at = params.completedAt;
+    }
 
-    let { data, error } = await sb
+    const { data, error } = await sb
       .from('deployments')
       .insert(payload)
       .select()
       .single();
 
     if (error) {
-      console.warn('[Supabase] Retrying deployment insert with standard columns:', error.message);
-      // Fallback if some column names differ
-      const fallbackPayload: any = {
-        project_id: params.projectId,
-        organization_id: params.organizationId,
-        status: params.status,
-        url: params.deploymentUrl,
-      };
-      if (params.userId) fallbackPayload.user_id = params.userId;
-      if (params.storagePath) fallbackPayload.storage_path = params.storagePath;
-
-      const retryRes = await sb
-        .from('deployments')
-        .insert(fallbackPayload)
-        .select()
-        .single();
-
-      if (retryRes.error) {
-        console.warn('[Supabase] Trying fallback insert to hosting_deployments:', retryRes.error.message);
-        const hdPayload = {
-          project_id: params.projectId,
-          organization_id: params.organizationId,
-          status: params.status,
-          url: params.deploymentUrl,
-        };
-        const hdRes = await sb
-          .from('hosting_deployments')
-          .insert(hdPayload)
-          .select()
-          .single();
-
-        if (hdRes.error) {
-          console.error('[Supabase] Failed to insert deployment record:', hdRes.error);
-          throw hdRes.error;
-        }
-        data = hdRes.data;
-      } else {
-        data = retryRes.data;
-      }
+      console.error('[Supabase] Failed to insert deployment record:', error);
+      throw error;
     }
 
     return {
@@ -1265,17 +1115,17 @@ export const supabaseData = {
       organizationId: data.organization_id,
       userId: data.user_id,
       status: data.status,
-      url: data.deployment_url || data.url,
-      deploymentUrl: data.deployment_url || data.url,
-      storagePath: data.storage_path || params.storagePath,
-      commitMessage: data.commit_message || params.commitMessage,
-      creator: data.creator || params.creator,
-      branch: data.branch || params.branch || 'main',
-      framework: data.framework || params.framework,
-      buildCommand: data.build_command || params.buildCommand,
-      outputDirectory: data.output_directory || params.outputDirectory,
-      packageManager: data.package_manager || params.packageManager,
-      createdAt: data.created_at,
+      url: data.deployment_url,
+      deploymentUrl: data.deployment_url,
+      storagePath: data.storage_path,
+      commitMessage: params.commitMessage || 'Manual deployment',
+      creator: params.creator || 'developer',
+      branch: params.branch || 'main',
+      framework: params.framework || 'react',
+      buildCommand: params.buildCommand,
+      outputDirectory: params.outputDirectory,
+      packageManager: params.packageManager,
+      createdAt: data.created_at || new Date().toISOString(),
       completedAt: data.completed_at,
     };
   },
@@ -1293,7 +1143,7 @@ export const supabaseData = {
 
     console.log('[Supabase] Updating deployment status:', { deploymentId, status, completedAt });
 
-    const updatePayload: any = { status };
+    const updatePayload: { status: string; completed_at?: string } = { status };
     if (completedAt) {
       updatePayload.completed_at = completedAt;
     }
@@ -1305,11 +1155,7 @@ export const supabaseData = {
         .eq('id', deploymentId);
 
       if (error) {
-        console.warn('[Supabase] Error updating deployment status, trying hosting_deployments:', error.message);
-        await sb
-          .from('hosting_deployments')
-          .update(updatePayload)
-          .eq('id', deploymentId);
+        console.warn('[Supabase] Error updating deployment status:', error.message);
       }
     } catch (err) {
       console.warn('[Supabase] Exception updating deployment status:', err);
@@ -1441,23 +1287,37 @@ export const supabaseData = {
 
     const cleanDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
 
+    // Resolve authenticated user for user_id
+    const { data: authData } = await sb.auth.getUser();
+    const verifiedUserId = authData?.user?.id;
+
     console.log('[Supabase] Inserting domain into public.domains:', {
       project_id: projectId,
       organization_id: orgId,
       domain: cleanDomain,
+      user_id: verifiedUserId,
     });
+
+    // STRICT: public.domains columns: id, user_id, project_id, organization_id, domain, status, created_at
+    const domainPayload: {
+      project_id: string;
+      organization_id: string;
+      domain: string;
+      status: string;
+      user_id?: string;
+    } = {
+      project_id: projectId,
+      organization_id: orgId,
+      domain: cleanDomain,
+      status: 'verified',
+    };
+    if (verifiedUserId) {
+      domainPayload.user_id = verifiedUserId;
+    }
 
     const { data, error } = await sb
       .from('domains')
-      .insert({
-        project_id: projectId,
-        organization_id: orgId,
-        domain: cleanDomain,
-        status: 'verified',
-        dns_type: 'CNAME',
-        dns_target: 'cname.optic.doy.best',
-        ssl_status: 'active',
-      })
+      .insert(domainPayload)
       .select()
       .single();
 
@@ -1470,11 +1330,11 @@ export const supabaseData = {
       id: data.id,
       projectId: data.project_id,
       domain: data.domain,
-      status: data.status,
-      dnsType: data.dns_type,
-      dnsTarget: data.dns_target,
-      sslStatus: data.ssl_status,
-      createdAt: data.created_at,
+      status: data.status || 'verified',
+      dnsType: 'CNAME',
+      dnsTarget: 'cname.optic.doy.best',
+      sslStatus: 'active',
+      createdAt: data.created_at || new Date().toISOString(),
     };
   },
 

@@ -124,13 +124,12 @@ export default async function handler(req: any, res: any) {
       try {
         const { data: profile } = await sb
           .from('profiles')
-          .select('id, display_name, full_name, name')
+          .select('id, full_name, avatar_url')
           .eq('id', file.user_id)
           .maybeSingle();
 
         if (profile) {
-          uploaderName =
-            profile.display_name || profile.full_name || profile.name || 'Optic User';
+          uploaderName = profile.full_name || 'Optic User';
         }
       } catch (pErr) {
         console.warn('[API /api/share] Profile query warning:', pErr);

@@ -159,11 +159,7 @@ export default async function handler(req: any, res: any) {
 
         let { data, error } = await query;
         if (error) {
-          let hQuery = sb.from('hosting_deployments').select('*').order('created_at', { ascending: false });
-          if (projectId) hQuery = hQuery.eq('project_id', projectId);
-          if (orgId) hQuery = hQuery.eq('organization_id', orgId);
-          const hRes = await hQuery;
-          data = hRes.data;
+          console.error('[API /api/hosting?action=deployments] Error querying deployments:', error.message);
         }
 
         if (data) {

@@ -231,18 +231,12 @@ export async function handleDeploymentRequest(
       .eq('id', deploymentId)
       .maybeSingle();
 
+    if (depErr) {
+      console.error('[Optic Hosting] Error querying deployments:', depErr.message);
+    }
+
     if (depData) {
       deployment = depData;
-    } else {
-      // Fallback check in hosting_deployments if present
-      const { data: hDepData } = await sb
-        .from('hosting_deployments')
-        .select('id, project_id, organization_id, status')
-        .eq('id', deploymentId)
-        .maybeSingle();
-      if (hDepData) {
-        deployment = hDepData;
-      }
     }
   } catch (err: any) {
     console.error('[Optic Hosting] DB lookup exception:', err);

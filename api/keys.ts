@@ -78,7 +78,7 @@ export default async function handler(req: any, res: any) {
       // Select only non-sensitive metadata: NEVER select or return key_hash
       const { data, error } = await sb
         .from('api_keys')
-        .select('id, name, key_prefix, status, created_at, last_used_at')
+        .select('id, name, created_at, last_used_at')
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
 
@@ -93,8 +93,8 @@ export default async function handler(req: any, res: any) {
       const keys = (data || []).map((k: any) => ({
         id: k.id,
         name: k.name,
-        keyPrefix: k.key_prefix,
-        status: k.status,
+        keyPrefix: `opt_live_${k.id.substring(0, 8)}...`,
+        status: 'active',
         createdAt: k.created_at,
         lastUsedAt: k.last_used_at,
       }));
@@ -138,9 +138,7 @@ export default async function handler(req: any, res: any) {
           .insert({
             user_id: userId,
             name,
-            key_prefix: keyPrefix,
             key_hash: keyHash,
-            status: 'active',
           })
           .select()
           .single();
@@ -159,7 +157,7 @@ export default async function handler(req: any, res: any) {
             id: data.id,
             name: data.name,
             rawKey, // returned ONLY once to developer
-            keyPrefix: data.key_prefix,
+            keyPrefix,
             createdAt: data.created_at,
           },
         });
@@ -201,9 +199,10 @@ export default async function handler(req: any, res: any) {
 
       const sb = getSupabaseServerClient(token);
       if (sb) {
+        // Since api_keys schema has no status column, revoking deletes the key record
         const { error } = await sb
           .from('api_keys')
-          .update({ status: 'revoked' })
+          .delete()
           .eq('id', id)
           .eq('user_id', userId);
 
