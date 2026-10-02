@@ -38,6 +38,18 @@ interface StoredApiKey {
 const waitlist: WaitlistEntry[] = [];
 
 function parseJsonBody(req: IncomingMessage): Promise<any> {
+  const existing = (req as any).body;
+  if (existing !== undefined && existing !== null) {
+    if (typeof existing === 'string') {
+      try {
+        return Promise.resolve(JSON.parse(existing));
+      } catch {
+        return Promise.resolve({});
+      }
+    }
+    return Promise.resolve(existing);
+  }
+
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', (chunk) => {
@@ -57,6 +69,7 @@ function parseJsonBody(req: IncomingMessage): Promise<any> {
 function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.end(JSON.stringify(data));
 }
 
@@ -87,6 +100,17 @@ export async function handleApiRequest(
   }
 
   const method = req.method || 'GET';
+
+  // Handle CORS Preflight for all API routes
+  if (method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-user-id');
+    res.end();
+    return;
+  }
+
   let pathname = '';
   let action = '';
   try {
@@ -652,6 +676,58 @@ export async function handleApiRequest(
     } catch (err: any) {
       console.error('[API /api/organizations] Uncaught exception:', err);
       return sendJson(res, 500, { success: false, error: 'Failed to fetch organizations' });
+    }
+  }
+
+  // 9b. GET/POST /api/domains
+  if (pathname === '/api/domains' || pathname.startsWith('/api/domains')) {
+    try {
+      const { userId, token } = await resolveUserId(req);
+      const sb = getSupabaseServerClient(token);
+      const parsed = new URL(url, 'http://localhost');
+      const projectId = parsed.searchParams.get('projectId');
+      const domainParam = parsed.searchParams.get('domain');
+
+      if (method === 'GET') {
+        if (!sb) {
+          return sendJson(res, 200, { success: true, domains: [] });
+        }
+        let query = sb.from('domains').select('*').order('created_at', { ascending: false });
+        if (projectId) {
+          query = query.eq('project_id', projectId);
+        } else if (userId && userId !== 'usr_dev') {
+          query = query.eq('user_id', userId);
+        }
+        const { data, error } = await query;
+        if (error) {
+          console.error('[API /api/domains] Error querying domains:', error);
+          return sendJson(res, 500, { success: false, error: error.message });
+        }
+        return sendJson(res, 200, { success: true, domains: data || [] });
+      }
+
+      if (method === 'POST') {
+        const body = await parseJsonBody(req);
+        const domain = (body.domain || domainParam || '').trim().toLowerCase();
+        if (!domain) {
+          return sendJson(res, 400, { success: false, error: 'Domain name is required' });
+        }
+        return sendJson(res, 200, {
+          success: true,
+          domain,
+          verified: false,
+          configured: true,
+          dns: {
+            type: 'CNAME',
+            name: domain,
+            target: 'cname.optic.doy.best',
+            status: 'pending_verification',
+          },
+        });
+      }
+    } catch (err: any) {
+      console.error('[API /api/domains] Error:', err);
+      return sendJson(res, 500, { success: false, error: err?.message || 'Failed to process domain request' });
     }
   }
 

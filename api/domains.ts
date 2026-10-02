@@ -3,14 +3,14 @@ import { handleApiRequest } from '../src/server/apiHandler.js';
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   if (!req.url) {
-    req.url = '/api/keys';
-  } else if (!req.url.startsWith('/api/keys')) {
-    req.url = `/api/keys${req.url.startsWith('/') ? '' : '/'}${req.url}`;
+    req.url = '/api/domains';
+  } else if (!req.url.startsWith('/api/domains')) {
+    req.url = `/api/domains${req.url.startsWith('/') ? '' : '/'}${req.url}`;
   }
 
   return handleApiRequest(req, res, () => {
     res.statusCode = 404;
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ success: false, error: 'API key endpoint not found' }));
+    res.end(JSON.stringify({ success: false, error: 'Domains endpoint not found' }));
   });
 }

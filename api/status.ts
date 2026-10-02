@@ -1,43 +1,16 @@
-import { getR2Config } from '../src/server/r2Storage.js';
-import { getSupabaseSecretKey, getSupabaseAnonKey } from '../src/server/supabaseServer.js';
+import type { IncomingMessage, ServerResponse } from 'http';
+import { handleApiRequest } from '../src/server/apiHandler.js';
 
-export default async function handler(req: any, res: any) {
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    return res.status(200).end();
+export default async function handler(req: IncomingMessage, res: ServerResponse) {
+  if (!req.url) {
+    req.url = '/api/status';
+  } else if (!req.url.startsWith('/api/status') && !req.url.startsWith('/status')) {
+    req.url = `/api/status${req.url.startsWith('/') ? '' : '/'}${req.url}`;
   }
 
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return res.status(405).json({ success: false, error: `Method ${req.method} Not Allowed` });
-  }
-
-  const config = getR2Config();
-  const hasDb = Boolean(getSupabaseSecretKey() || getSupabaseAnonKey());
-
-  return res.status(200).json({
-    status: 'ok',
-    success: true,
-    service: 'Optic Cloud & Edge Platform',
-    timestamp: new Date().toISOString(),
-    isConfigured: config.isConfigured,
-    provider: 'Cloudflare R2',
-    bucketName: config.bucketName || null,
-    storage: {
-      provider: 'Cloudflare R2',
-      configured: config.isConfigured,
-      bucket: config.bucketName || null,
-      hasAccountId: Boolean(config.accountId),
-      hasAccessKey: Boolean(config.accessKeyId),
-      hasSecretKey: Boolean(config.secretAccessKey),
-    },
-    database: {
-      provider: 'Supabase PostgreSQL',
-      configured: hasDb,
-    },
-    notice: config.isConfigured
-      ? 'Cloudflare R2 is configured and operational.'
-      : 'Cloudflare R2 server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.',
+  return handleApiRequest(req, res, () => {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ status: 'ok', service: 'Optic API' }));
   });
 }

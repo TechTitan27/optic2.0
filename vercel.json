@@ -6,76 +6,48 @@
       "destination": "/api/status"
     },
     {
+      "source": "/api/health",
+      "destination": "/api/health"
+    },
+    {
       "source": "/api/status",
       "destination": "/api/status"
     },
     {
-      "source": "/api/health",
-      "destination": "/api/status"
+      "source": "/v1/waitlist",
+      "destination": "/api/waitlist"
     },
     {
-      "source": "/api/deployments/:action*",
-      "destination": "/api/deployments"
+      "source": "/api/deployments/:path*",
+      "destination": "/api/deployments?path=:path*"
     },
     {
-      "source": "/api/storage/share",
-      "destination": "/api/share"
+      "source": "/api/cloud/:path*",
+      "destination": "/api/cloud"
     },
     {
-      "source": "/api/storage/:action*",
-      "destination": "/api/storage?action=:action*"
-    },
-    {
-      "source": "/api/storage",
-      "destination": "/api/storage"
-    },
-    {
-      "source": "/api/share",
-      "destination": "/api/share"
-    },
-    {
-      "source": "/api/hosting/:action*",
-      "destination": "/api/hosting?action=:action*"
-    },
-    {
-      "source": "/api/hosting",
+      "source": "/api/hosting/:path*",
       "destination": "/api/hosting"
     },
     {
-      "source": "/api/keys/:action*",
-      "destination": "/api/keys?action=:action*"
+      "source": "/api/storage/:path*",
+      "destination": "/api/storage"
     },
     {
-      "source": "/api/keys",
+      "source": "/api/keys/:path*",
       "destination": "/api/keys"
     },
     {
-      "source": "/api/api-keys/:action*",
-      "destination": "/api/keys?action=:action*"
+      "source": "/api/share/:path*",
+      "destination": "/api/share"
     },
     {
-      "source": "/api/api-keys",
-      "destination": "/api/keys"
-    },
-    {
-      "source": "/v1/keys/:action*",
-      "destination": "/api/keys?action=:action*"
-    },
-    {
-      "source": "/api/organizations/:action*",
-      "destination": "/api/organizations?action=:action*"
-    },
-    {
-      "source": "/api/organizations",
+      "source": "/api/organizations/:path*",
       "destination": "/api/organizations"
     },
     {
-      "source": "/api/waitlist",
-      "destination": "/api/waitlist"
-    },
-    {
-      "source": "/v1/waitlist",
-      "destination": "/api/waitlist"
+      "source": "/api/domains/:path*",
+      "destination": "/api/domains"
     },
     {
       "source": "/(.*)",
