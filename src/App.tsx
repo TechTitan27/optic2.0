@@ -30,10 +30,11 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 function MainApp() {
   const { user } = useAuth();
 
-  // Public deployment route guard: /api/deployments/* must NEVER render the Optic React SPA
+  // Public deployment route guard: /api/deployments/* and *.host.optic.doy.best must NEVER render the Optic React SPA
   if (
     typeof window !== 'undefined' &&
-    (window.location.pathname.startsWith('/api/deployments') ||
+    (window.location.hostname.includes('.host.') ||
+      window.location.pathname.startsWith('/api/deployments') ||
       window.location.pathname.includes('/api/deployments/'))
   ) {
     window.location.reload();
@@ -121,16 +122,33 @@ function MainApp() {
       let nextUrl = path;
       if (currentInfo.lockedSurface) {
         // Keep URL clean on dedicated subdomains (cloud.optic.doy.best / hosting.optic.doy.best)
-        nextUrl =
-          path === '/login' ||
-          path === '/signup' ||
-          path === '/auth/callback' ||
-          path.startsWith('/s/') ||
-          path.startsWith('/share/') ||
-          path === '/new' ||
-          path.startsWith('/new')
-            ? path
-            : '/';
+        if (currentInfo.lockedSurface === 'hosting') {
+          if (
+            path === '/login' ||
+            path === '/signup' ||
+            path === '/auth/callback' ||
+            path === '/new' ||
+            path.startsWith('/new') ||
+            path.startsWith('/project/') ||
+            path.startsWith('/projects/') ||
+            path.startsWith('/p/')
+          ) {
+            nextUrl = path;
+          } else if (path === '/hosting/new') {
+            nextUrl = '/new';
+          } else {
+            nextUrl = '/';
+          }
+        } else {
+          nextUrl =
+            path === '/login' ||
+            path === '/signup' ||
+            path === '/auth/callback' ||
+            path.startsWith('/s/') ||
+            path.startsWith('/share/')
+              ? path
+              : '/';
+        }
       } else {
         if (surface === 'share') {
           nextUrl = path.startsWith('/s/') ? path : `/s/${path}`;

@@ -333,13 +333,36 @@ export function resolveSurfaceState(): {
     if (pathname === '/signup' || pathname === '/register') {
       return { surface: 'signup', path: '/signup' };
     }
-    if (pathname === '/new' || pathname.startsWith('/new')) {
+    // New project routes: /new, /new/*, or /hosting/new
+    if (
+      pathname === '/new' ||
+      pathname.startsWith('/new') ||
+      pathname === '/hosting/new' ||
+      pathname.startsWith('/hosting/new')
+    ) {
+      if (pathname.startsWith('/hosting/new')) {
+        try {
+          window.history.replaceState(null, '', '/new');
+        } catch {
+          // ignore
+        }
+      }
       return { surface: 'hosting', path: '/new' };
     }
+    // Project detail page routes: /project/:slug, /projects/:slug, /p/:slug
+    if (
+      pathname.startsWith('/project/') ||
+      pathname.startsWith('/projects/') ||
+      pathname.startsWith('/p/')
+    ) {
+      return { surface: 'hosting', path: rawPathname };
+    }
+    // Normalize extraneous path segments like /hosting or /dashboard on the dedicated hosting domain
     if (
       pathname === '/dashboard' ||
       pathname.startsWith('/dashboard/') ||
       pathname === '/hosting' ||
+      pathname === '/hosting/' ||
       pathname === '/cloud'
     ) {
       try {
@@ -347,8 +370,9 @@ export function resolveSurfaceState(): {
       } catch {
         // ignore
       }
+      return { surface: 'hosting', path: '/' };
     }
-    return { surface: 'hosting', path: '/' };
+    return { surface: 'hosting', path: rawPathname || '/' };
   }
 
   // 3. DOCS PRODUCT HOSTNAME (docs.optic.doy.best / docs.localhost)

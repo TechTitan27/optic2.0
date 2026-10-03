@@ -1179,6 +1179,64 @@ export const supabaseData = {
   },
 
   /**
+   * Set active production deployment for a project
+   */
+  async setProductionDeployment(projectId: string, deploymentId: string, projectSlug?: string): Promise<boolean> {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(`optic_prod_${projectId}`, deploymentId);
+        if (projectSlug) {
+          localStorage.setItem(`optic_prod_${projectSlug.toLowerCase().trim()}`, deploymentId);
+        }
+      }
+
+      const res = await fetch('/api/hosting?action=set-production', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, deploymentId, projectSlug }),
+      });
+      const data = await res.json();
+      return Boolean(data?.success);
+    } catch (err) {
+      console.warn('Notice setting production target:', err);
+      return false;
+    }
+  },
+
+  /**
+   * Get active production deployment ID for a project
+   */
+  async getProductionDeployment(projectId: string, projectSlug?: string): Promise<string | null> {
+    try {
+      const local =
+        typeof localStorage !== 'undefined'
+          ? localStorage.getItem(`optic_prod_${projectId}`) ||
+            (projectSlug ? localStorage.getItem(`optic_prod_${projectSlug.toLowerCase().trim()}`) : null)
+          : null;
+
+      const res = await fetch(
+        `/api/hosting?action=production&projectId=${encodeURIComponent(projectId)}${
+          projectSlug ? `&slug=${encodeURIComponent(projectSlug)}` : ''
+        }`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.productionDeploymentId) {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(`optic_prod_${projectId}`, data.productionDeploymentId);
+          }
+          return data.productionDeploymentId;
+        }
+      }
+      return local;
+    } catch {
+      return typeof localStorage !== 'undefined'
+        ? localStorage.getItem(`optic_prod_${projectId}`)
+        : null;
+    }
+  },
+
+  /**
    * Insert a log event in `public.deployment_logs`
    */
   async addDeploymentLog(

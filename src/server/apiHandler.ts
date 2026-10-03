@@ -18,7 +18,12 @@ import {
   createSharePresignedUrls,
   verifyR2DeploymentFile,
 } from './r2Storage.js';
-import { handleDeploymentRequest, cacheDeploymentRecord } from './deploymentServer.js';
+import {
+  handleDeploymentRequest,
+  cacheDeploymentRecord,
+  setProductionDeployment,
+  resolveProductionDeploymentId,
+} from './deploymentServer.js';
 
 interface WaitlistEntry {
   email: string;
@@ -124,8 +129,18 @@ export async function handleApiRequest(
     pathname = url.split('?')[0];
   }
 
-  // 0. GET/HEAD /api/deployments/:deploymentId/* (REAL PUBLIC STATIC FILE SERVER)
-  if (url.startsWith('/api/deployments') || pathname.startsWith('/api/deployments')) {
+  const hostHeader = (
+    (req.headers['x-forwarded-host'] as string) ||
+    (req.headers['host'] as string) ||
+    ''
+  ).toLowerCase().split(':')[0];
+
+  // 0. GET/HEAD /api/deployments/:deploymentId/* or *.host.optic.doy.best (REAL PUBLIC STATIC FILE SERVER)
+  if (
+    hostHeader.includes('.host.') ||
+    url.startsWith('/api/deployments') ||
+    pathname.startsWith('/api/deployments')
+  ) {
     return handleDeploymentRequest(req, res);
   }
 
@@ -725,6 +740,127 @@ export async function handleApiRequest(
       return sendJson(res, 500, {
         success: false,
         error: err?.message || 'Failed to finalize deployment',
+      });
+    }
+  }
+
+  // 7d. POST /api/hosting/production or /api/hosting?action=set-production
+  // Promotes / restores a deployment to be the active production deployment without copying files
+  if (
+    ((pathname === '/api/hosting' && action === 'set-production') ||
+      pathname.startsWith('/api/hosting/set-production') ||
+      pathname.startsWith('/api/hosting/production')) &&
+    method === 'POST'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user) {
+        return sendJson(res, 401, {
+          success: false,
+          error: 'Unauthorized. Please sign in to manage production deployments.',
+        });
+      }
+
+      const body = await parseJsonBody(req);
+      const { projectId, deploymentId, projectSlug } = body;
+
+      if (!projectId || !deploymentId) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'projectId and deploymentId are required to set production target.',
+        });
+      }
+
+      // Update memory cache
+      setProductionDeployment(projectId, deploymentId, projectSlug);
+
+      // Persist production target pointer in R2
+      try {
+        const r2Client = getR2Client();
+        const r2Config = getR2Config();
+        if (r2Client && r2Config.bucketName) {
+          const payload = JSON.stringify({
+            projectId,
+            projectSlug: projectSlug || '',
+            productionDeploymentId: deploymentId,
+            promotedAt: new Date().toISOString(),
+            promotedBy: user.id,
+          });
+
+          await r2Client.send(
+            new PutObjectCommand({
+              Bucket: r2Config.bucketName,
+              Key: `projects/${projectId}/production.json`,
+              Body: Buffer.from(payload, 'utf-8'),
+              ContentType: 'application/json',
+            })
+          );
+
+          if (projectSlug) {
+            await r2Client.send(
+              new PutObjectCommand({
+                Bucket: r2Config.bucketName,
+                Key: `projects/${projectSlug.toLowerCase().trim()}/production.json`,
+                Body: Buffer.from(payload, 'utf-8'),
+                ContentType: 'application/json',
+              })
+            );
+          }
+        }
+      } catch (r2Err: any) {
+        console.warn('[Optic Hosting] Notice persisting production pointer in R2:', r2Err.message);
+      }
+
+      console.log('[PRODUCTION_TARGET_UPDATED]', {
+        projectId,
+        projectSlug,
+        productionDeploymentId: deploymentId,
+      });
+
+      return sendJson(res, 200, {
+        success: true,
+        projectId,
+        productionDeploymentId: deploymentId,
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/production] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to update production target',
+      });
+    }
+  }
+
+  // 7e. GET /api/hosting/production or /api/hosting?action=production
+  if (
+    ((pathname === '/api/hosting' && action === 'production') ||
+      pathname.startsWith('/api/hosting/production')) &&
+    method === 'GET'
+  ) {
+    try {
+      const urlObj = new URL(url, 'http://localhost');
+      const projectId = urlObj.searchParams.get('projectId') || '';
+      const slug = urlObj.searchParams.get('slug') || '';
+      const target = projectId || slug;
+
+      if (!target) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'projectId or slug query parameter is required',
+        });
+      }
+
+      const prodDepId = await resolveProductionDeploymentId(target);
+      return sendJson(res, 200, {
+        success: true,
+        target,
+        productionDeploymentId: prodDepId || null,
+      });
+    } catch (err: any) {
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to retrieve production deployment target',
       });
     }
   }

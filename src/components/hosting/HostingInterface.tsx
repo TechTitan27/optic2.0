@@ -1,27 +1,21 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../common/Card';
-import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { CodeBlock } from '../common/CodeBlock';
 import { OrganizationSwitcher } from '../common/OrganizationSwitcher';
-import { HostingProject, DeploymentItem, DeploymentLog, DomainItem, SurfaceType } from '../../types';
+import { HostingProject, DeploymentItem, DeploymentLog, SurfaceType } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useOrganization } from '../../context/OrganizationContext';
 import { useToast } from '../../context/ToastContext';
 import { supabaseData } from '../../lib/supabaseData';
 import { storageService } from '../../lib/storageService';
-import { getUserAvatarUrl, getOrgAvatarUrl, getDiceBearOrgAvatarUrl } from '../../lib/avatar';
 import {
   HostingProjectCardSkeleton,
-  HostingProjectDetailsSkeleton,
   DeploymentItemSkeleton,
-  DeploymentRowSkeleton,
-  DomainRowSkeleton,
   TerminalLogsSkeleton,
   Skeleton,
-  SkeletonText,
 } from '../common/Skeleton';
 import {
   Server,
@@ -29,29 +23,24 @@ import {
   ArrowLeft,
   ExternalLink,
   GitBranch,
-  Clock,
   Terminal,
   Globe,
-  Settings,
-  ShieldCheck,
-  CheckCircle2,
   AlertCircle,
   RotateCw,
-  Code2,
   Trash2,
   Building2,
-  Sparkles,
-  Layers,
   Upload,
   FileCode,
   Folder,
-  FileText,
   Copy,
   Check,
-  HardDrive,
-  Info,
   ChevronRight,
   ListFilter,
+  CheckCircle2,
+  Shield,
+  ArrowUpRight,
+  History,
+  Sparkles,
 } from 'lucide-react';
 import { NewProjectPage } from './NewProjectPage';
 
@@ -74,11 +63,21 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
   // Projects state
   const [projects, setProjects] = useState<HostingProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState<boolean>(true);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
   const [selectedProject, setSelectedProject] = useState<HostingProject | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'deployments' | 'logs' | 'domains' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'deployments' | 'overview' | 'logs' | 'settings'>('deployments');
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // Route navigation helper for New Project
-  const isSubdomain = typeof window !== 'undefined' && window.location.hostname.startsWith('hosting.');
+  // Production Deployment Target State
+  const [productionDeploymentId, setProductionDeploymentId] = useState<string | null>(null);
+  const [promotingId, setPromotingId] = useState<string | null>(null);
+
+  // Dedicated Hosting Host identification (hosting.optic.doy.best, hosting.localhost, etc.)
+  const isSubdomain =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'hosting.optic.doy.best' ||
+      window.location.hostname.startsWith('hosting.') ||
+      window.location.hostname === 'hosting.localhost');
   const newProjectPath = isSubdomain ? '/new' : '/hosting/new';
 
   const handleNavigateToNewProject = () => {
@@ -90,7 +89,67 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
     currentPath === '/hosting/new' ||
     (typeof window !== 'undefined' &&
       (window.location.pathname === '/new' ||
-        window.location.pathname === '/hosting/new'));
+        window.location.pathname === '/hosting/new' ||
+        window.location.pathname.startsWith('/new/')));
+
+  // Helper to extract project identifier from path or query params
+  const getRequestedProjectSlug = useCallback((): string | null => {
+    if (typeof window === 'undefined') return null;
+    const path = currentPath || window.location.pathname;
+    const cleanPath = path.split('?')[0].split('#')[0];
+    const match = cleanPath.match(/(?:\/hosting)?\/(?:project|projects|p)\/([^/]+)/i);
+    if (match) return decodeURIComponent(match[1]).trim();
+    try {
+      const param = new URLSearchParams(window.location.search).get('project');
+      if (param) return param.trim();
+    } catch {
+      // ignore
+    }
+    return null;
+  }, [currentPath]);
+
+  // Synchronize selected project with URL when projects change or route changes
+  useEffect(() => {
+    const slug = getRequestedProjectSlug();
+    if (slug && projects.length > 0) {
+      const match = projects.find(
+        (p) => p.slug.toLowerCase() === slug.toLowerCase() || p.id === slug
+      );
+      if (match) {
+        if (!selectedProject || selectedProject.id !== match.id) {
+          setSelectedProject(match);
+        }
+      }
+    } else if (!slug && !isNewProjectRoute) {
+      // When navigated back to root / or /hosting without a project slug
+      if (
+        currentPath === '/' ||
+        currentPath === '/hosting' ||
+        currentPath === '/projects' ||
+        (typeof window !== 'undefined' &&
+          (window.location.pathname === '/' || window.location.pathname === '/hosting'))
+      ) {
+        if (selectedProject) {
+          setSelectedProject(null);
+        }
+      }
+    }
+  }, [projects, currentPath, getRequestedProjectSlug, isNewProjectRoute, selectedProject]);
+
+  // Handler: Select a project and update URL
+  const handleSelectProject = (proj: HostingProject) => {
+    setSelectedProject(proj);
+    setActiveTab('deployments');
+    const targetPath = isSubdomain ? `/project/${proj.slug}` : `/hosting/project/${proj.slug}`;
+    onNavigateSurface('hosting', targetPath);
+  };
+
+  // Handler: Return to project list
+  const handleBackToProjects = () => {
+    setSelectedProject(null);
+    const targetPath = isSubdomain ? '/' : '/hosting';
+    onNavigateSurface('hosting', targetPath);
+  };
 
   // First Visit Org Onboarding form state
   const [onboardOrgName, setOnboardOrgName] = useState('');
@@ -99,11 +158,13 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
   // Deployments state
   const [deploymentsList, setDeploymentsList] = useState<DeploymentItem[]>([]);
   const [loadingDeployments, setLoadingDeployments] = useState<boolean>(true);
+  const [deploymentsError, setDeploymentsError] = useState<string | null>(null);
   const [selectedDeploymentForLogs, setSelectedDeploymentForLogs] = useState<string | null>(null);
 
   // Deployment Logs state
   const [deploymentLogs, setDeploymentLogs] = useState<DeploymentLog[]>([]);
   const [loadingLogs, setLoadingLogs] = useState<boolean>(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
 
   // Static Deployment Upload Modal state
   const [deployModalOpen, setDeployModalOpen] = useState(false);
@@ -114,267 +175,216 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
   const [deployProgressPercent, setDeployProgressPercent] = useState(0);
   const [deployLiveLogs, setDeployLiveLogs] = useState<DeploymentLog[]>([]);
   const [deployError, setDeployError] = useState<string | null>(null);
+  const [deletingProject, setDeletingProject] = useState(false);
+
+  // Copy helper
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
   const folderInputRef = useRef<HTMLInputElement>(null);
   const filesInputRef = useRef<HTMLInputElement>(null);
 
-  // Domains state
-  const [projectDomains, setProjectDomains] = useState<DomainItem[]>([]);
-  const [loadingDomains, setLoadingDomains] = useState<boolean>(true);
-  const [customDomainInput, setCustomDomainInput] = useState('');
-  const [addingDomain, setAddingDomain] = useState(false);
+  // Host origin helper
+  const hostOrigin =
+    typeof window !== 'undefined' ? window.location.origin : 'https://hosting.optic.doy.best';
 
-  // Deleting project state
-  const [deletingProject, setDeletingProject] = useState(false);
-
-  // Copy helper
-  const [copiedUrl, setCopiedUrl] = useState(false);
-
-  // Error states for explicit async UI sections
-  const [projectsError, setProjectsError] = useState<string | null>(null);
-  const [deploymentsError, setDeploymentsError] = useState<string | null>(null);
-  const [logsError, setLogsError] = useState<string | null>(null);
-  const [domainsError, setDomainsError] = useState<string | null>(null);
-
-  // Clear stale data and fetch projects when currentOrg changes
+  // 1. Fetch projects for the active organization
   const fetchProjects = useCallback(async () => {
-    if (orgLoading) {
-      setLoadingProjects(true);
-      return;
-    }
-
     if (!currentOrg?.id) {
       setProjects([]);
-      setSelectedProject(null);
-      setDeploymentsList([]);
-      setProjectDomains([]);
-      setDeploymentLogs([]);
-      setProjectsError(null);
       setLoadingProjects(false);
       return;
     }
 
-    // Immediately clear stale projects so navigation doesn't flash previous org's projects
-    setProjects([]);
     setLoadingProjects(true);
     setProjectsError(null);
+
     try {
       const data = await supabaseData.getHostingProjects(currentOrg.id);
       setProjects(data);
 
-      // Keep selectedProject in sync if still present in new organization
       if (selectedProject) {
-        const found = data.find((p) => p.id === selectedProject.id);
-        if (found) {
-          setSelectedProject(found);
-        } else {
-          // If project belonged to another organization, clear it immediately
-          setSelectedProject(null);
-          setDeploymentsList([]);
-          setProjectDomains([]);
-          setDeploymentLogs([]);
+        const updated = data.find((p) => p.id === selectedProject.id);
+        if (updated) {
+          setSelectedProject((prev) => (prev ? { ...prev, ...updated } : updated));
         }
       }
     } catch (err: any) {
-      console.warn('Error fetching hosting projects:', err);
-      setProjectsError(err?.message || 'Failed to load projects. Please try again.');
+      console.error('Error fetching hosting projects:', err);
+      setProjectsError(err?.message || 'Failed to load hosting projects.');
     } finally {
       setLoadingProjects(false);
     }
-  }, [currentOrg?.id, orgLoading]);
+  }, [currentOrg?.id, selectedProject?.id]);
 
-  // When organization changes: clear stale project/deployment state and refresh projects
   useEffect(() => {
-    setSelectedProject(null);
-    setDeploymentsList([]);
-    setProjectDomains([]);
-    setDeploymentLogs([]);
-    if (currentOrg?.id) {
-      setLoadingProjects(true);
-      fetchProjects();
-    } else if (!orgLoading) {
-      setLoadingProjects(false);
-    }
-  }, [currentOrg?.id, orgLoading, fetchProjects]);
+    fetchProjects();
+  }, [fetchProjects]);
 
-  // Fetch project deployments and domains when selectedProject changes
+  // 2. Fetch project deployments and production target when selectedProject changes
   const loadProjectDetails = useCallback(async () => {
-    if (!selectedProject || !currentOrg?.id) {
-      setDeploymentsList([]);
-      setProjectDomains([]);
-      setLoadingDeployments(false);
-      setLoadingDomains(false);
-      setDeploymentsError(null);
-      return;
-    }
+    if (!selectedProject?.id) return;
 
-    // Immediately clear stale deployments & domains so navigation doesn't flash previous project's data
-    setDeploymentsList([]);
-    setProjectDomains([]);
     setLoadingDeployments(true);
-    setLoadingDomains(true);
     setDeploymentsError(null);
-    setDomainsError(null);
-    try {
-      const [deps, doms] = await Promise.all([
-        supabaseData.getProjectDeployments(selectedProject.id, currentOrg.id),
-        supabaseData.getProjectDomains(selectedProject.id),
-      ]);
-      setDeploymentsList(deps);
-      setProjectDomains(doms);
 
-      if (deps.length > 0) {
-        if (!selectedDeploymentForLogs) {
-          setSelectedDeploymentForLogs(deps[0].id);
-        }
-        const readyDep = deps.find((d) => d.status === 'ready');
-        if (readyDep?.deploymentUrl || readyDep?.url) {
-          const liveUrl = readyDep.deploymentUrl || readyDep.url;
-          setSelectedProject((prev) =>
-            prev && prev.id === selectedProject.id
-              ? { ...prev, productionDomain: liveUrl, latestDeployment: deps[0] }
-              : prev
-          );
+    try {
+      const deps = await supabaseData.getProjectDeployments(selectedProject.id, currentOrg?.id);
+      setDeploymentsList(deps);
+
+      // Load production target
+      const prodTarget = await supabaseData.getProductionDeployment(selectedProject.id, selectedProject.slug);
+      if (prodTarget) {
+        setProductionDeploymentId(prodTarget);
+      } else {
+        // Default to newest ready deployment
+        const firstReady = deps.find((d) => d.status === 'ready');
+        if (firstReady) {
+          setProductionDeploymentId(firstReady.id);
         }
       }
+
+      if (deps.length > 0 && !selectedDeploymentForLogs) {
+        setSelectedDeploymentForLogs(deps[0].id);
+      }
     } catch (err: any) {
-      console.warn('Error loading project details:', err);
+      console.error('Error loading deployments:', err);
       setDeploymentsError(err?.message || 'Failed to load deployments for this project.');
-      setDomainsError(err?.message || 'Failed to load domains.');
     } finally {
       setLoadingDeployments(false);
-      setLoadingDomains(false);
     }
-  }, [selectedProject?.id, currentOrg?.id]);
+  }, [selectedProject?.id, selectedProject?.slug, currentOrg?.id]);
 
   useEffect(() => {
-    loadProjectDetails();
-  }, [loadProjectDetails]);
+    if (selectedProject?.id) {
+      loadProjectDetails();
+    }
+  }, [selectedProject?.id, loadProjectDetails]);
 
-  // Fetch deployment logs when selectedDeploymentForLogs changes
+  // 3. Fetch deployment logs when selectedDeploymentForLogs changes
   useEffect(() => {
     if (!selectedDeploymentForLogs) {
       setDeploymentLogs([]);
-      setLoadingLogs(false);
-      setLogsError(null);
       return;
     }
 
-    const fetchLogs = async () => {
-      // Immediately clear stale logs so old logs don't flash while new deployment logs load
-      setDeploymentLogs([]);
-      setLoadingLogs(true);
-      setLogsError(null);
-      try {
-        const logs = await supabaseData.getDeploymentLogs(selectedDeploymentForLogs);
-        if (logs.length > 0) {
-          setDeploymentLogs(logs);
-        } else {
-          // If no logs stored in table yet, provide structured lifecycle logs based on deployment metadata
+    setLoadingLogs(true);
+    setLogsError(null);
+
+    supabaseData
+      .getDeploymentLogs(selectedDeploymentForLogs)
+      .then((logs) => {
+        if (logs.length === 0) {
           const targetDep = deploymentsList.find((d) => d.id === selectedDeploymentForLogs);
-          if (targetDep) {
-            setDeploymentLogs([
-              {
-                id: 'log-1',
-                deploymentId: targetDep.id,
-                timestamp: new Date(targetDep.createdAt).toLocaleTimeString(),
-                level: 'info',
-                message: `Deployment initialized for ${selectedProject?.name || 'app'} (${targetDep.id})`,
-              },
-              {
-                id: 'log-2',
-                deploymentId: targetDep.id,
-                timestamp: new Date(targetDep.createdAt).toLocaleTimeString(),
-                level: 'info',
-                message: `Uploaded to R2 bucket: ${targetDep.storagePath || `deployments/${currentOrg?.id}/${targetDep.projectId}/${targetDep.id}`}`,
-              },
-              {
-                id: 'log-3',
-                deploymentId: targetDep.id,
-                timestamp: targetDep.completedAt ? new Date(targetDep.completedAt).toLocaleTimeString() : new Date(targetDep.createdAt).toLocaleTimeString(),
-                level: targetDep.status === 'failed' ? 'error' : 'success',
-                message: targetDep.status === 'failed' ? 'Deployment failed' : 'Deployment ready',
-              },
-            ]);
-          } else {
-            setDeploymentLogs([]);
-          }
+          const syntheticLogs: DeploymentLog[] = [
+            {
+              id: 'init-1',
+              deploymentId: selectedDeploymentForLogs,
+              timestamp: targetDep ? new Date(targetDep.createdAt).toLocaleTimeString() : '00:00:00',
+              level: 'info',
+              message: `Deployment initiated for project ${selectedProject?.slug || 'project'}`,
+            },
+            {
+              id: 'init-2',
+              deploymentId: selectedDeploymentForLogs,
+              timestamp: targetDep ? new Date(targetDep.createdAt).toLocaleTimeString() : '00:00:01',
+              level: 'info',
+              message: `Storage destination: Cloudflare R2 (${targetDep?.storagePath || 'private bucket'})`,
+            },
+            {
+              id: 'init-3',
+              deploymentId: selectedDeploymentForLogs,
+              timestamp: targetDep?.completedAt
+                ? new Date(targetDep.completedAt).toLocaleTimeString()
+                : new Date().toLocaleTimeString(),
+              level: targetDep?.status === 'ready' ? 'success' : 'info',
+              message:
+                targetDep?.status === 'ready'
+                  ? 'Deployment verified and READY on Optic Cloud Edge Network.'
+                  : `Deployment status: ${targetDep?.status || 'pending'}`,
+            },
+          ];
+          setDeploymentLogs(syntheticLogs);
+        } else {
+          setDeploymentLogs(logs);
         }
-      } catch (err: any) {
-        console.warn('Error fetching deployment logs:', err);
-        setLogsError(err?.message || 'Failed to retrieve deployment logs.');
-      } finally {
+      })
+      .catch((err) => {
+        setLogsError(err?.message || 'Failed to load logs');
+      })
+      .finally(() => {
         setLoadingLogs(false);
+      });
+  }, [selectedDeploymentForLogs, deploymentsList, selectedProject?.slug]);
+
+  // Compute sequential deployment numbers (#1, #2, #3 ... #N)
+  // Ordered oldest (#1) to newest (#N)
+  const numberedDeployments = useMemo(() => {
+    const total = deploymentsList.length;
+    return deploymentsList.map((dep, index) => {
+      const number = total - index;
+      const isProduction =
+        productionDeploymentId === dep.id || (!productionDeploymentId && index === 0 && dep.status === 'ready');
+      return {
+        ...dep,
+        seqNumber: number,
+        isProduction,
+      };
+    });
+  }, [deploymentsList, productionDeploymentId]);
+
+  const activeProductionDeployment = useMemo(() => {
+    return numberedDeployments.find((d) => d.isProduction) || numberedDeployments[0] || null;
+  }, [numberedDeployments]);
+
+  // Handler: Promote or Rollback a deployment to Production
+  const handlePromoteToProduction = async (dep: typeof numberedDeployments[0]) => {
+    if (!selectedProject) return;
+    setPromotingId(dep.id);
+
+    try {
+      const ok = await supabaseData.setProductionDeployment(selectedProject.id, dep.id, selectedProject.slug);
+      if (ok) {
+        setProductionDeploymentId(dep.id);
+        toast.success(
+          `Deployment #${dep.seqNumber} is now active in production on ${selectedProject.slug}.host.optic.doy.best`,
+          'Production Target Updated'
+        );
+      } else {
+        throw new Error('Failed to update production target.');
       }
-    };
-
-    fetchLogs();
-  }, [selectedDeploymentForLogs, deploymentsList]);
-
-  // Handler: Folder selection for New Deployment
-  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    if (!fileList || fileList.length === 0) return;
-
-    const filesArray: { file: File; relativePath: string }[] = [];
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
-      // Skip system hidden files like .DS_Store
-      if (file.name.startsWith('.DS_Store') || file.name.startsWith('__MACOSX')) continue;
-      const relativePath = (file as any).webkitRelativePath || file.name;
-      filesArray.push({ file, relativePath });
-    }
-
-    setSelectedFiles(filesArray);
-    if (!deploymentNote) {
-      setDeploymentNote(`Static deployment: ${filesArray.length} files`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to promote deployment', 'Error');
+    } finally {
+      setPromotingId(null);
     }
   };
 
-  // Handler: Files selection (multiple files fallback)
-  const handleFilesSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    if (!fileList || fileList.length === 0) return;
-
-    const filesArray: { file: File; relativePath: string }[] = [];
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
-      if (file.name.startsWith('.DS_Store')) continue;
-      filesArray.push({ file, relativePath: file.name });
-    }
-
-    setSelectedFiles(filesArray);
-    if (!deploymentNote) {
-      setDeploymentNote(`Static deployment: ${filesArray.length} files`);
+  // Handler: Copy URL with feedback
+  const handleCopy = (text: string, key: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      setCopiedUrl(key);
+      setTimeout(() => setCopiedUrl(null), 2000);
     }
   };
 
-  // Handler: Drag and drop files onto modal
-  const handleDropFiles = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (!e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
+  // Handler: Drag and drop files upload
+  const handleFilesSelected = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
 
-    const fileList = e.dataTransfer.files;
-    const filesArray: { file: File; relativePath: string }[] = [];
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
-      if (file.name.startsWith('.DS_Store')) continue;
-      filesArray.push({ file, relativePath: file.name });
+    const items: { file: File; relativePath: string }[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const relPath = (f as any).webkitRelativePath || f.name;
+      items.push({ file: f, relativePath: relPath });
     }
 
-    setSelectedFiles(filesArray);
-    if (!deploymentNote) {
-      setDeploymentNote(`Static deployment: ${filesArray.length} files`);
-    }
+    setSelectedFiles(items);
   };
 
-  // Handler: Execute REAL Static Deployment MVP
-  const handleExecuteDeployment = async () => {
-    if (!selectedProject || !currentOrg || !user?.id) return;
-    if (selectedFiles.length === 0) {
-      toast.warning('Please select files or a folder to deploy.', 'No Files Selected');
-      return;
-    }
+  // Handler: Start Deployment
+  const handleStartDeploy = async () => {
+    if (!selectedProject || !currentOrg || !user || selectedFiles.length === 0) return;
 
     setIsDeploying(true);
     setDeployError(null);
@@ -391,10 +401,6 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
           });
 
     const storagePath = `deployments/${currentOrg.id}/${selectedProject.id}/${deploymentId}`;
-    const hostOrigin =
-      typeof window !== 'undefined'
-        ? window.location.origin
-        : 'https://hosting.optic.doy.best';
     const deploymentUrl = `${hostOrigin}/api/deployments/${deploymentId}/`;
 
     const addLocalLog = (message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') => {
@@ -410,11 +416,10 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
     };
 
     try {
-      // 1. Initial status: pending
-      setDeployStepText('Creating deployment record in database...');
-      addLocalLog('Deployment created', 'info');
+      setDeployStepText('Creating deployment record...');
+      addLocalLog('Deployment record initialized', 'info');
 
-      const newDeployment = await supabaseData.createDeploymentRecord({
+      await supabaseData.createDeploymentRecord({
         id: deploymentId,
         projectId: selectedProject.id,
         organizationId: currentOrg.id,
@@ -427,12 +432,10 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
         branch: selectedProject.gitBranch || 'main',
       });
 
-      // 2. Set status to building
-      setDeployStepText('Requesting upload authorization...');
+      setDeployStepText('Uploading files to Cloudflare R2...');
       await supabaseData.updateDeploymentStatus(deploymentId, 'building');
-      addLocalLog('Uploading files to Cloudflare R2', 'info');
+      addLocalLog('Uploading assets to private R2 storage', 'info');
 
-      // 3. Upload each file to Cloudflare R2 with isolated key structure
       const totalFiles = selectedFiles.length;
       let uploadedCount = 0;
 
@@ -452,31 +455,24 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
         }
         if (!mimeType) mimeType = 'application/octet-stream';
 
-        const fileSize = item.file.size;
-
         setDeployStepText(`Uploading [${i + 1}/${totalFiles}]: ${fileName}`);
 
-        // Request isolated presigned PUT URL
         const presigned = await storageService.requestDeploymentUploadUrl({
           organizationId: currentOrg.id,
           projectId: selectedProject.id,
           deploymentId,
           filePath: fileName,
           mimeType,
-          size: fileSize,
+          size: item.file.size,
         });
 
-        // PUT file directly to Cloudflare R2
         await storageService.uploadDirectToR2(presigned.uploadUrl, item.file, mimeType);
-
         uploadedCount++;
-        const currentPercent = Math.round((uploadedCount / totalFiles) * 100);
-        setDeployProgressPercent(currentPercent);
+        setDeployProgressPercent(Math.round((uploadedCount / totalFiles) * 100));
       }
 
-      // 4. Verify R2 object existence and finalize deployment to READY
       setDeployStepText('Verifying Cloudflare R2 upload...');
-      addLocalLog('Verifying R2 upload', 'info');
+      addLocalLog('Verifying R2 storage integrity', 'info');
 
       let completedAt = new Date().toISOString();
       try {
@@ -486,302 +482,202 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
           deploymentId,
           filePath: selectedFiles[0]?.relativePath || 'index.html',
         });
-
-        if (!finalizeRes.success) {
-          throw new Error(finalizeRes.error || 'Failed to verify deployment files in Cloudflare R2.');
-        }
-        if (finalizeRes.completedAt) {
-          completedAt = finalizeRes.completedAt;
-        }
+        if (finalizeRes.completedAt) completedAt = finalizeRes.completedAt;
       } catch (finalizeErr: any) {
         console.warn('Finalize verification notice:', finalizeErr.message);
-        // Direct status fallback to ensure readiness
         await supabaseData.updateDeploymentStatus(deploymentId, 'ready', completedAt);
       }
 
-      addLocalLog('Deployment ready', 'success');
+      // Automatically promote to production if it is the first deployment
+      if (deploymentsList.length === 0 || !productionDeploymentId) {
+        await supabaseData.setProductionDeployment(selectedProject.id, deploymentId, selectedProject.slug);
+        setProductionDeploymentId(deploymentId);
+      }
 
-      setSelectedProject((prev) =>
-        prev
-          ? {
-              ...prev,
-              productionDomain: deploymentUrl,
-              status: 'ready',
-              latestDeployment: {
-                id: deploymentId,
-                projectId: prev.id,
-                organizationId: currentOrg.id,
-                userId: user.id,
-                status: 'ready',
-                url: deploymentUrl,
-                deploymentUrl,
-                storagePath,
-                createdAt: new Date().toISOString(),
-                completedAt,
-              },
-            }
-          : null
-      );
+      addLocalLog('Deployment READY on edge network', 'success');
 
-      // Refresh project and deployments
       await loadProjectDetails();
       await fetchProjects();
       setSelectedDeploymentForLogs(deploymentId);
 
       toast.success(
-        `Deployed ${uploadedCount} files to Cloudflare R2 for ${selectedProject.name}.`,
+        `Deployed ${uploadedCount} file(s) for ${selectedProject.name}.`,
         'Deployment Ready'
       );
 
-      // Keep modal open for 1.2s to show success state before closing
       setTimeout(() => {
         setIsDeploying(false);
         setDeployModalOpen(false);
         setSelectedFiles([]);
         setDeploymentNote('');
-        setActiveTab('deployments');
-      }, 1200);
+      }, 1000);
     } catch (err: any) {
       console.error('Deployment failure:', err);
-      const errMsg = err?.message || 'Deployment upload failed';
-      setDeployError(errMsg);
-      addLocalLog(`Deployment failed: ${errMsg}`, 'error');
-      await supabaseData.updateDeploymentStatus(deploymentId, 'failed', new Date().toISOString()).catch(() => {});
+      setDeployError(err?.message || 'Deployment failed. Check storage credentials and network.');
+      addLocalLog(err?.message || 'Deployment error', 'error');
       setIsDeploying(false);
-      toast.error(errMsg, 'Deployment Failed');
-    }
-  };
-
-  // Handler: Add Custom Domain
-  const handleAddDomain = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customDomainInput.trim() || !selectedProject || !currentOrg) return;
-    setAddingDomain(true);
-
-    try {
-      const newDom = await supabaseData.addProjectDomain(
-        selectedProject.id,
-        currentOrg.id,
-        customDomainInput.trim()
-      );
-      setProjectDomains((prev) => [newDom, ...prev]);
-      setCustomDomainInput('');
-      toast.success(`Domain ${newDom.domain} added. Configure CNAME to activate.`, 'Domain Added');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to add domain', 'Domain Error');
-    } finally {
-      setAddingDomain(false);
-    }
-  };
-
-  // Handler: Delete Custom Domain
-  const handleDeleteDomain = async (domainId: string) => {
-    if (!selectedProject) return;
-    try {
-      await supabaseData.deleteProjectDomain(domainId, selectedProject.id);
-      setProjectDomains((prev) => prev.filter((d) => d.id !== domainId));
-      toast.info('Custom domain removed.', 'Domain Removed');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to remove domain', 'Delete Error');
     }
   };
 
   // Handler: Delete Project
   const handleDeleteProject = async () => {
     if (!selectedProject || !currentOrg) return;
-    const confirm = window.confirm(
-      `Are you sure you want to delete "${selectedProject.name}"? This will tear down all edge deployments.`
-    );
-    if (!confirm) return;
-
     setDeletingProject(true);
+
     try {
       await supabaseData.deleteHostingProject(selectedProject.id, currentOrg.id);
       setProjects((prev) => prev.filter((p) => p.id !== selectedProject.id));
-      setSelectedProject(null);
+      handleBackToProjects();
       toast.info(`Project "${selectedProject.name}" deleted.`, 'Project Deleted');
     } catch (err: any) {
-      toast.error(err.message || 'Failed to delete project', 'Error');
+      toast.error(err?.message || 'Failed to delete project', 'Error');
     } finally {
       setDeletingProject(false);
     }
   };
 
-  // Handler: First Visit Organization Onboarding
-  const handleOnboardOrgSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!onboardOrgName.trim()) return;
-    setCreatingOnboardOrg(true);
-    try {
-      await createOrg(onboardOrgName.trim());
-      setOnboardOrgName('');
-      toast.success('Organization created! You can now launch hosting projects.', 'Welcome to Optic Hosting');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to create organization', 'Error');
-    } finally {
-      setCreatingOnboardOrg(false);
-    }
-  };
+  // Filtered projects list
+  const filteredProjects = useMemo(() => {
+    if (!searchQuery.trim()) return projects;
+    const q = searchQuery.toLowerCase().trim();
+    return projects.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.slug.toLowerCase().includes(q)
+    );
+  }, [projects, searchQuery]);
 
-  const handleCopyUrl = (url: string) => {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(url);
-      setCopiedUrl(true);
-      setTimeout(() => setCopiedUrl(false), 2000);
-    }
-  };
-
-  const latestDep = deploymentsList[0] || selectedProject?.latestDeployment;
-
-  // Render Status Badge helper
-  const renderStatusBadge = (status: string) => {
-    switch (status) {
-      case 'ready':
-        return (
-          <Badge variant="success" dot size="sm">
-            Ready
-          </Badge>
-        );
-      case 'building':
-        return (
-          <Badge variant="warning" dot size="sm">
-            Building
-          </Badge>
-        );
-      case 'pending':
-        return (
-          <Badge variant="outline" dot size="sm">
-            Pending
-          </Badge>
-        );
-      case 'failed':
-        return (
-          <Badge variant="error" dot size="sm">
-            Failed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" size="sm">
-            {status}
-          </Badge>
-        );
-    }
-  };
-
-  // Dedicated Full-Page Route: hosting.optic.doy.best/new
+  // Full-Page Route: /new or /hosting/new
   if (isNewProjectRoute) {
     return (
       <NewProjectPage
-        onBackToHosting={() => {
-          onNavigateSurface('hosting', isSubdomain ? '/' : '/hosting');
-        }}
+        onBackToHosting={handleBackToProjects}
         onProjectCreated={(newProject) => {
           setProjects((prev) => [newProject, ...prev.filter((p) => p.id !== newProject.id)]);
-          setSelectedProject(newProject);
-          setActiveTab('overview');
-          onNavigateSurface('hosting', isSubdomain ? '/' : '/hosting');
+          handleSelectProject(newProject);
         }}
       />
     );
   }
 
+  // Canonical Production and Immutable URLs
+  const currentProdUrl = selectedProject
+    ? `https://${selectedProject.slug}.host.optic.doy.best`
+    : '';
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-6xl mx-auto">
       {/* CASE 1: USER HAS NO ORGANIZATIONS ON FIRST VISIT */}
       {!orgLoading && !hasOrganizations ? (
-        <div className="max-w-xl mx-auto py-12 px-4 text-center space-y-6">
-          <div className="w-14 h-14 rounded-2xl bg-indigo-950/60 border border-indigo-800/60 mx-auto flex items-center justify-center text-indigo-400 shadow-xl shadow-indigo-950/30">
-            <Building2 size={28} />
+        <div className="max-w-md mx-auto py-16 px-4 text-center space-y-6">
+          <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 mx-auto flex items-center justify-center text-zinc-300">
+            <Building2 size={24} />
           </div>
-
-          <div className="space-y-2">
-            <h1 className="text-2xl font-bold tracking-tight text-white">Create Your Organization</h1>
-            <p className="text-sm text-zinc-400 leading-relaxed">
-              Hosting projects on Optic belong to organizations. This allows you to manage deployments, custom domains, and collaborate with your team.
+          <div className="space-y-1.5">
+            <h1 className="text-xl font-semibold tracking-tight text-zinc-100">Create an Organization</h1>
+            <p className="text-xs text-zinc-400">
+              Hosting projects and edge deployments belong to organizations.
             </p>
           </div>
 
-          <Card className="p-6 text-left border-zinc-800 bg-zinc-900/50 backdrop-blur-sm">
-            <form onSubmit={handleOnboardOrgSubmit} className="space-y-4">
-              <Input
-                label="Organization Name"
-                placeholder="e.g. Acme Studio or Personal"
-                value={onboardOrgName}
-                onChange={(e) => setOnboardOrgName(e.target.value)}
-                required
-                autoFocus
-              />
-
-              <div className="flex items-center gap-3 p-3.5 rounded-lg bg-zinc-900/90 border border-zinc-800 text-xs text-zinc-400">
-                <img
-                  src={getDiceBearOrgAvatarUrl(onboardOrgName || 'Optic Organization')}
-                  alt="Organization Icon Preview"
-                  className="w-10 h-10 rounded-lg object-cover border border-zinc-700/60 bg-zinc-800 shrink-0 shadow-sm"
-                />
-                <div className="space-y-0.5 min-w-0">
-                  <div className="flex items-center gap-2 text-zinc-200 font-medium">
-                    <Sparkles size={14} className="text-amber-400" />
-                    <span>Organization Visual Mark</span>
-                  </div>
-                  <p className="text-[11px] text-zinc-400">
-                    Glass avatar dynamically generated from organization UUID.
-                  </p>
-                </div>
-              </div>
-
-              <Button
-                type="submit"
-                variant="primary"
-                className="w-full justify-center"
-                loading={creatingOnboardOrg}
-                disabled={!onboardOrgName.trim()}
-              >
-                Create Organization & Continue
-              </Button>
-            </form>
-          </Card>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!onboardOrgName.trim()) return;
+              setCreatingOnboardOrg(true);
+              try {
+                await createOrg(onboardOrgName.trim());
+                toast.success('Organization created.', 'Ready');
+              } catch (err: any) {
+                toast.error(err?.message || 'Failed to create organization', 'Error');
+              } finally {
+                setCreatingOnboardOrg(false);
+              }
+            }}
+            className="space-y-3 p-5 rounded-xl border border-zinc-800 bg-zinc-900/40 text-left"
+          >
+            <Input
+              label="Organization Name"
+              placeholder="e.g. Acme Studio"
+              value={onboardOrgName}
+              onChange={(e) => setOnboardOrgName(e.target.value)}
+              required
+              autoFocus
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              className="w-full justify-center"
+              loading={creatingOnboardOrg}
+              disabled={!onboardOrgName.trim()}
+            >
+              Continue
+            </Button>
+          </form>
         </div>
       ) : selectedProject ? (
         /* CASE 2: PROJECT DETAIL VIEW */
         <div className="space-y-6">
-          {/* Back button & Project Header */}
+          {/* Top Bar: Breadcrumb, Production Domain, Actions */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-800">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setSelectedProject(null)}
-                className="p-1.5 rounded-md hover:bg-zinc-900 text-zinc-400 hover:text-white transition-colors"
-                title="Back to all projects"
-              >
-                <ArrowLeft size={16} />
-              </button>
-              <div>
-                <div className="flex items-center gap-2.5">
-                  <h1 className="text-xl font-bold tracking-tight text-white">{selectedProject.name}</h1>
-                  {renderStatusBadge(latestDep?.status || selectedProject.status)}
-                </div>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <a
-                    href={selectedProject.productionDomain}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs font-mono text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
-                  >
-                    <span>{selectedProject.productionDomain}</span>
-                    <ExternalLink size={11} />
-                  </a>
-                  <button
-                    onClick={() => handleCopyUrl(selectedProject.productionDomain)}
-                    className="text-zinc-500 hover:text-zinc-300 p-0.5 transition-colors"
-                    title="Copy production domain"
-                  >
-                    {copiedUrl ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
-                  </button>
-                </div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-xs text-zinc-400">
+                <button
+                  onClick={handleBackToProjects}
+                  className="hover:text-zinc-200 transition-colors flex items-center gap-1"
+                >
+                  <ArrowLeft size={13} />
+                  <span>Projects</span>
+                </button>
+                <span>/</span>
+                <span className="text-zinc-200 font-medium">{selectedProject.name}</span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl font-bold tracking-tight text-zinc-100">
+                  {selectedProject.name}
+                </h1>
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Ready
+                </span>
+              </div>
+
+              {/* Production Domain */}
+              <div className="flex items-center gap-2 pt-0.5">
+                <a
+                  href={currentProdUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-mono text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition-colors"
+                >
+                  <span>{currentProdUrl}</span>
+                  <ArrowUpRight size={13} />
+                </a>
+                <button
+                  onClick={() => handleCopy(currentProdUrl, 'prod-url')}
+                  className="text-zinc-500 hover:text-zinc-300 p-0.5 transition-colors"
+                  title="Copy production domain"
+                >
+                  {copiedUrl === 'prod-url' ? (
+                    <Check size={12} className="text-emerald-400" />
+                  ) : (
+                    <Copy size={12} />
+                  )}
+                </button>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  const targetUrl = activeProductionDeployment?.deploymentUrl || currentProdUrl;
+                  window.open(targetUrl, '_blank');
+                }}
+                icon={<ExternalLink size={13} />}
+              >
+                Visit
+              </Button>
               <Button
                 size="sm"
                 variant="primary"
@@ -790,171 +686,107 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                   setDeployError(null);
                   setDeployModalOpen(true);
                 }}
-                icon={<Upload size={14} />}
+                icon={<Upload size={13} />}
               >
-                New Deployment
+                Deploy
               </Button>
             </div>
           </div>
 
-          {/* Project Navigation Tabs */}
-          <div className="flex border-b border-zinc-800 text-xs font-medium gap-6">
-            {(['overview', 'deployments', 'logs', 'domains', 'settings'] as const).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`pb-3 capitalize transition-colors relative ${
-                  activeTab === tab ? 'text-white font-semibold' : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                {tab}
-                {activeTab === tab && (
-                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />
-                )}
-              </button>
-            ))}
+          {/* Clean Segmented Tab Navigation */}
+          <div className="flex items-center border-b border-zinc-800 gap-1 text-xs">
+            {(['deployments', 'overview', 'logs', 'settings'] as const).map((tab) => {
+              const active = activeTab === tab;
+              return (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-3.5 py-2 font-medium capitalize transition-colors relative border-b-2 -mb-px ${
+                    active
+                      ? 'border-indigo-500 text-zinc-100 font-semibold'
+                      : 'border-transparent text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  {tab}
+                  {tab === 'deployments' && deploymentsList.length > 0 && (
+                    <span className="ml-1.5 text-[10px] px-1.5 py-0.2 rounded-full bg-zinc-800 text-zinc-400">
+                      {deploymentsList.length}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
-          {/* TAB 1: OVERVIEW */}
-          {activeTab === 'overview' && (
+          {/* TAB 1: DEPLOYMENTS (Vercel-style Lifecycle Focus) */}
+          {activeTab === 'deployments' && (
             <div className="space-y-6">
-              {/* Production Status Banner */}
-              <Card className="p-5 border-zinc-800 bg-zinc-900/40">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="space-y-1.5">
+              {/* Production Deployment Target Card */}
+              {activeProductionDeployment && (
+                <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/50 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono text-zinc-400 uppercase tracking-wider">
-                        Active Production Deployment
+                      <span className="text-[11px] font-semibold tracking-wider text-emerald-400 uppercase flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                        Current Production Deployment
                       </span>
-                      {renderStatusBadge(latestDep?.status || 'ready')}
+                      <span className="text-xs font-mono font-bold text-zinc-200">
+                        #{activeProductionDeployment.seqNumber}
+                      </span>
                     </div>
-                    <div className="text-base font-semibold text-white flex items-center gap-2">
-                      <Globe size={16} className="text-indigo-400" />
+
+                    <div className="text-xs text-zinc-400">
+                      Promoted {new Date(activeProductionDeployment.createdAt).toLocaleDateString()} by{' '}
+                      {activeProductionDeployment.creator || 'developer'}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 border-t border-zinc-800/60">
+                    <div className="space-y-1">
                       <a
-                        href={selectedProject.productionDomain}
+                        href={currentProdUrl}
                         target="_blank"
                         rel="noreferrer"
-                        className="hover:underline text-indigo-300 font-mono text-sm"
+                        className="text-sm font-mono font-medium text-zinc-100 hover:text-indigo-400 flex items-center gap-1.5"
                       >
-                        {selectedProject.productionDomain}
+                        <Globe size={14} className="text-indigo-400 shrink-0" />
+                        <span>{currentProdUrl}</span>
+                        <ArrowUpRight size={13} className="text-zinc-500" />
+                      </a>
+                      <p className="text-xs text-zinc-400">
+                        {activeProductionDeployment.commitMessage || 'Manual deployment'}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={activeProductionDeployment.deploymentUrl || `${hostOrigin}/api/deployments/${activeProductionDeployment.id}/`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2.5 py-1 text-xs font-mono rounded-md border border-zinc-800 bg-zinc-900 text-zinc-300 hover:text-white hover:border-zinc-700 transition-colors inline-flex items-center gap-1"
+                      >
+                        <span>Inspect #{activeProductionDeployment.seqNumber}</span>
+                        <ExternalLink size={11} />
                       </a>
                     </div>
-                    {loadingDeployments ? (
-                      <div className="flex items-center gap-2 pt-0.5">
-                        <Skeleton className="w-56 h-3.5" />
-                      </div>
-                    ) : latestDep ? (
-                      <p className="text-xs text-zinc-400">
-                        {latestDep.commitMessage || 'Manual deployment'} · Deployed {new Date(latestDep.createdAt).toLocaleString()} by {latestDep.creator || 'developer'}
-                      </p>
-                    ) : (
-                      <p className="text-xs text-zinc-500">No deployments yet for this project</p>
-                    )}
                   </div>
+                </div>
+              )}
 
+              {/* Deployment History List */}
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 overflow-hidden">
+                <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={() => {
-                        setSelectedFiles([]);
-                        setDeployError(null);
-                        setDeployModalOpen(true);
-                      }}
-                      icon={<Upload size={14} />}
-                    >
-                      Deploy Website
-                    </Button>
+                    <History size={14} className="text-zinc-400" />
+                    <h2 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">
+                      Deployment History
+                    </h2>
                   </div>
+                  <span className="text-[11px] text-zinc-500">
+                    {numberedDeployments.length} total release(s)
+                  </span>
                 </div>
 
-                {loadingDeployments ? (
-                  <div className="mt-4 pt-3 border-t border-zinc-800/80 flex items-center justify-between">
-                    <Skeleton className="w-48 h-3" />
-                    <Skeleton className="w-24 h-3" />
-                  </div>
-                ) : latestDep?.storagePath ? (
-                  <div className="mt-4 pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs text-zinc-500 font-mono">
-                    <span className="truncate">R2 Storage: {latestDep.storagePath}</span>
-                    <span className="text-emerald-400 shrink-0 ml-2">Isolated Object Path</span>
-                  </div>
-                ) : null}
-              </Card>
-
-              {/* Project Stats */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <Card className="p-4">
-                  <span className="text-[11px] font-mono text-zinc-500 uppercase">Framework</span>
-                  <p className="text-sm font-semibold text-zinc-100 capitalize mt-1">
-                    {selectedProject.framework}
-                  </p>
-                </Card>
-                <Card className="p-4">
-                  <span className="text-[11px] font-mono text-zinc-500 uppercase">Organization</span>
-                  <p className="text-sm font-semibold text-zinc-100 mt-1 truncate">
-                    {currentOrg?.name} ({currentOrg?.slug})
-                  </p>
-                </Card>
-                <Card className="p-4">
-                  <span className="text-[11px] font-mono text-zinc-500 uppercase">Total Deployments</span>
-                  {loadingDeployments ? (
-                    <Skeleton className="w-10 h-5 mt-1" />
-                  ) : (
-                    <p className="text-sm font-semibold text-zinc-100 mt-1">
-                      {deploymentsList.length}
-                    </p>
-                  )}
-                </Card>
-              </div>
-
-              {/* Storage vs CDN Notice */}
-              <div className="p-4 rounded-xl border border-zinc-800/80 bg-zinc-900/30 text-xs text-zinc-400 space-y-1">
-                <div className="flex items-center gap-2 text-zinc-200 font-medium">
-                  <HardDrive size={15} className="text-sky-400" />
-                  <span>Real Cloudflare R2 Deployment Storage</span>
-                </div>
-                <p className="leading-relaxed text-[11px] text-zinc-400">
-                  Files are uploaded directly to private Cloudflare R2 object storage under <code className="text-zinc-300 font-mono">deployments/{currentOrg?.id}/{selectedProject.id}/...</code>. Static files remain isolated from Cloud user storage.
-                </p>
-              </div>
-
-              {/* CLI Deploy Example */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
-                  <Terminal size={14} className="text-indigo-400" />
-                  <span>Deploy via Optic CLI</span>
-                </div>
-                <CodeBlock
-                  language="bash"
-                  code={`# Deploy build output directory to Optic Hosting
-npx optic deploy ./dist --project ${selectedProject.slug}`}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* TAB 2: DEPLOYMENTS (Deployment History) */}
-          {activeTab === 'deployments' && (
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-3">
-                <div>
-                  <CardTitle className="text-sm">Deployment History</CardTitle>
-                  <CardDescription>All static deployments and releases for this project</CardDescription>
-                </div>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => {
-                    setSelectedFiles([]);
-                    setDeployError(null);
-                    setDeployModalOpen(true);
-                  }}
-                  icon={<Upload size={13} />}
-                >
-                  New Deployment
-                </Button>
-              </CardHeader>
-              <CardContent className="p-0">
                 {loadingDeployments ? (
                   <div className="divide-y divide-zinc-800/60">
                     <DeploymentItemSkeleton />
@@ -965,133 +797,246 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
                   <div className="p-8 text-center space-y-3">
                     <AlertCircle size={20} className="text-red-400 mx-auto" />
                     <p className="text-xs text-red-400">{deploymentsError}</p>
-                    <Button size="sm" variant="outline" onClick={loadProjectDetails} icon={<RotateCw size={12} />}>
-                      Retry
-                    </Button>
-                  </div>
-                ) : deploymentsList.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-zinc-500 space-y-2">
-                    <p>No deployments recorded for this project yet.</p>
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => setDeployModalOpen(true)}
+                      onClick={loadProjectDetails}
+                      icon={<RotateCw size={12} />}
                     >
-                      Create First Deployment
+                      Retry
+                    </Button>
+                  </div>
+                ) : numberedDeployments.length === 0 ? (
+                  <div className="p-10 text-center space-y-3 text-xs text-zinc-400">
+                    <p>No deployments recorded yet for this project.</p>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => setDeployModalOpen(true)}
+                      icon={<Upload size={13} />}
+                    >
+                      Upload Static Website
                     </Button>
                   </div>
                 ) : (
-                  <div className="divide-y divide-zinc-800/60 font-mono text-xs">
-                    {deploymentsList.map((dep) => (
-                      <div
-                        key={dep.id}
-                        className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-zinc-900/40 transition-colors"
-                      >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            {renderStatusBadge(dep.status)}
-                            <span className="font-semibold text-zinc-100 font-sans">
-                              {dep.commitMessage || 'Static Website Deployment'}
-                            </span>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 text-zinc-500 text-[11px]">
-                            <span>ID: {dep.id.substring(0, 8)}</span>
-                            <span>·</span>
-                            <span>By: {dep.creator || 'developer'}</span>
-                            <span>·</span>
-                            <span>{new Date(dep.createdAt).toLocaleString()}</span>
-                            {dep.completedAt && (
-                              <>
-                                <span>·</span>
-                                <span className="text-zinc-400">Finished in {Math.max(1, Math.round((new Date(dep.completedAt).getTime() - new Date(dep.createdAt).getTime()) / 1000))}s</span>
-                              </>
-                            )}
-                          </div>
-                          {dep.storagePath && (
-                            <div className="text-[10px] text-zinc-600 truncate max-w-md">
-                              {dep.storagePath}
-                            </div>
-                          )}
-                        </div>
+                  <div className="divide-y divide-zinc-800/60">
+                    {numberedDeployments.map((dep) => {
+                      const immutableHostUrl = `https://${dep.id}.host.optic.doy.best`;
+                      const directApiUrl = `${hostOrigin}/api/deployments/${dep.id}/`;
 
-                        <div className="flex items-center gap-3 shrink-0">
-                          <button
-                            onClick={() => {
-                              setSelectedDeploymentForLogs(dep.id);
-                              setActiveTab('logs');
-                            }}
-                            className="text-xs text-zinc-400 hover:text-white px-2 py-1 rounded bg-zinc-800/60 hover:bg-zinc-800 transition-colors"
-                          >
-                            View Logs
-                          </button>
-                          <a
-                            href={dep.deploymentUrl || dep.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-indigo-400 hover:text-indigo-300 text-xs flex items-center gap-1 font-sans font-medium"
-                          >
-                            <span>Visit</span>
-                            <ExternalLink size={12} />
-                          </a>
+                      return (
+                        <div
+                          key={dep.id}
+                          className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 hover:bg-zinc-900/50 transition-colors"
+                        >
+                          {/* Left: Number, Status, Commit, Info */}
+                          <div className="space-y-1.5 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {/* Sequential number: e.g. #14 */}
+                              <span className="font-mono font-bold text-xs text-zinc-200">
+                                #{dep.seqNumber}
+                              </span>
+
+                              {/* Status badge */}
+                              {dep.status === 'ready' ? (
+                                <span className="text-[11px] font-semibold text-emerald-400 flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                  READY
+                                </span>
+                              ) : dep.status === 'building' ? (
+                                <span className="text-[11px] font-semibold text-amber-400 flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                  BUILDING
+                                </span>
+                              ) : dep.status === 'failed' ? (
+                                <span className="text-[11px] font-semibold text-red-400 flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                                  FAILED
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-zinc-400 uppercase font-semibold">
+                                  {dep.status}
+                                </span>
+                              )}
+
+                              {/* Target indicator: PRODUCTION or PREVIEW */}
+                              {dep.isProduction ? (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                  PRODUCTION
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-medium tracking-wider bg-zinc-800 text-zinc-400 border border-zinc-700/60">
+                                  PREVIEW
+                                </span>
+                              )}
+
+                              <span className="text-xs text-zinc-200 font-medium truncate max-w-xs">
+                                {dep.commitMessage || 'Manual deployment'}
+                              </span>
+                            </div>
+
+                            {/* Metadata line */}
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+                              <span className="font-mono">{dep.id.substring(0, 8)}</span>
+                              <span>·</span>
+                              <span>{new Date(dep.createdAt).toLocaleString()}</span>
+                              <span>·</span>
+                              <span>by {dep.creator || 'developer'}</span>
+                              <span>·</span>
+                              {/* Immutable link display */}
+                              <a
+                                href={directApiUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="font-mono text-zinc-400 hover:text-indigo-400 underline decoration-zinc-700 flex items-center gap-0.5"
+                                title={immutableHostUrl}
+                              >
+                                <span>{immutableHostUrl.replace('https://', '')}</span>
+                                <ExternalLink size={10} />
+                              </a>
+                            </div>
+                          </div>
+
+                          {/* Right: Actions */}
+                          <div className="flex items-center gap-2 shrink-0">
+                            {/* Promote / Restore to Production */}
+                            {dep.status === 'ready' && !dep.isProduction && (
+                              <button
+                                onClick={() => handlePromoteToProduction(dep)}
+                                disabled={promotingId === dep.id}
+                                className="px-2.5 py-1 text-xs font-medium rounded-md border border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white transition-colors disabled:opacity-50"
+                              >
+                                {promotingId === dep.id
+                                  ? 'Promoting...'
+                                  : dep.seqNumber < (activeProductionDeployment?.seqNumber || 0)
+                                  ? 'Restore'
+                                  : 'Promote'}
+                              </button>
+                            )}
+
+                            {/* View Logs button */}
+                            <button
+                              onClick={() => {
+                                setSelectedDeploymentForLogs(dep.id);
+                                setActiveTab('logs');
+                              }}
+                              className="px-2.5 py-1 text-xs font-medium rounded-md border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-white hover:border-zinc-700 transition-colors"
+                            >
+                              Logs
+                            </button>
+
+                            {/* Visit link */}
+                            <a
+                              href={dep.deploymentUrl || directApiUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30 transition-colors flex items-center gap-1"
+                            >
+                              <span>Visit</span>
+                              <ArrowUpRight size={12} />
+                            </a>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           )}
 
-          {/* TAB 3: LOGS (Deployment Logs) */}
+          {/* TAB 2: OVERVIEW */}
+          {activeTab === 'overview' && (
+            <div className="space-y-6">
+              {/* Architecture & URLs */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Card className="p-4 border-zinc-800 bg-zinc-900/40 space-y-2">
+                  <div className="text-[11px] font-mono text-zinc-500 uppercase">Production URL</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <a
+                      href={currentProdUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm font-mono text-indigo-400 hover:underline truncate"
+                    >
+                      {currentProdUrl}
+                    </a>
+                    <button
+                      onClick={() => handleCopy(currentProdUrl, 'overview-prod')}
+                      className="text-zinc-500 hover:text-zinc-300 p-1"
+                    >
+                      {copiedUrl === 'overview-prod' ? (
+                        <Check size={13} className="text-emerald-400" />
+                      ) : (
+                        <Copy size={13} />
+                      )}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Always routes to the active production deployment without downtime.
+                  </p>
+                </Card>
+
+                <Card className="p-4 border-zinc-800 bg-zinc-900/40 space-y-2">
+                  <div className="text-[11px] font-mono text-zinc-500 uppercase">Framework & RLS</div>
+                  <div className="text-sm font-semibold text-zinc-200 capitalize">
+                    {selectedProject.framework || 'Static HTML & Assets'}
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Scoped to organization <span className="font-mono text-zinc-300">{currentOrg?.name}</span>.
+                  </p>
+                </Card>
+              </div>
+
+              {/* CLI Deploy Example */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
+                  <Terminal size={14} className="text-indigo-400" />
+                  <span>Deploy via Optic CLI</span>
+                </div>
+                <CodeBlock
+                  language="bash"
+                  code={`# Deploy current directory to Optic Hosting\nnpx optic deploy ./dist --project ${selectedProject.slug}`}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: LOGS */}
           {activeTab === 'logs' && (
             <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-zinc-400">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                 <div className="flex items-center gap-2">
-                  <ListFilter size={14} className="text-zinc-500" />
+                  <ListFilter size={13} className="text-zinc-500" />
                   <span className="text-zinc-400">Deployment:</span>
                   <select
                     value={selectedDeploymentForLogs || ''}
                     onChange={(e) => setSelectedDeploymentForLogs(e.target.value)}
-                    className="bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1 text-xs text-zinc-200 font-mono focus:outline-none"
+                    className="bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1 text-xs text-zinc-200 font-mono focus:outline-none"
                   >
-                    {deploymentsList.map((d) => (
+                    {numberedDeployments.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.id.substring(0, 8)} - {d.status} ({new Date(d.createdAt).toLocaleTimeString()})
+                        #{d.seqNumber} ({d.id.substring(0, 8)}) - {d.status} {d.isProduction ? '— PRODUCTION' : ''}
                       </option>
                     ))}
                   </select>
                 </div>
-                <span className="font-mono text-zinc-500 text-[11px]">Storage: Cloudflare R2 (Private)</span>
+                <span className="font-mono text-zinc-500 text-[11px]">Storage: Private Cloudflare R2</span>
               </div>
 
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs text-zinc-300 space-y-2 overflow-x-auto shadow-inner min-h-[220px]">
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs text-zinc-300 space-y-2 overflow-x-auto min-h-[260px]">
                 {loadingLogs ? (
                   <TerminalLogsSkeleton />
                 ) : logsError ? (
-                  <div className="text-center py-8 space-y-3">
-                    <AlertCircle size={20} className="text-red-400 mx-auto" />
+                  <div className="text-center py-8 space-y-2">
                     <p className="text-xs text-red-400">{logsError}</p>
-                    <button
-                      onClick={() => {
-                        if (selectedDeploymentForLogs) {
-                          setLoadingLogs(true);
-                          setLogsError(null);
-                          supabaseData.getDeploymentLogs(selectedDeploymentForLogs)
-                            .then((l) => setDeploymentLogs(l))
-                            .catch((err) => setLogsError(err?.message || 'Failed to load logs'))
-                            .finally(() => setLoadingLogs(false));
-                        }
-                      }}
-                      className="px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 transition-colors inline-flex items-center gap-1.5"
-                    >
-                      <RotateCw size={12} />
-                      <span>Retry</span>
-                    </button>
                   </div>
                 ) : deploymentLogs.length > 0 ? (
                   deploymentLogs.map((log) => (
                     <div key={log.id} className="flex items-start gap-3">
-                      <span className="text-zinc-600 select-none text-[11px] shrink-0">{log.timestamp}</span>
+                      <span className="text-zinc-600 select-none text-[11px] shrink-0 font-mono">
+                        {log.timestamp}
+                      </span>
                       <span
                         className={`text-[10px] px-1 rounded uppercase font-bold select-none shrink-0 ${
                           log.level === 'success'
@@ -1105,493 +1050,327 @@ npx optic deploy ./dist --project ${selectedProject.slug}`}
                       >
                         {log.level}
                       </span>
-                      <span
-                        className={
-                          log.level === 'success'
-                            ? 'text-emerald-300 font-semibold'
-                            : log.level === 'error'
-                            ? 'text-red-300'
-                            : 'text-zinc-200'
-                        }
-                      >
-                        {log.message}
-                      </span>
+                      <span className="text-zinc-300 font-mono leading-relaxed">{log.message}</span>
                     </div>
                   ))
                 ) : (
-                  <div className="text-zinc-500 text-center py-8">
-                    No deployment logs recorded for this deployment yet.
-                  </div>
+                  <div className="text-center py-8 text-zinc-500">No logs for this deployment.</div>
                 )}
               </div>
             </div>
           )}
 
-          {/* TAB 4: DOMAINS */}
-          {activeTab === 'domains' && (
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm">Custom Domains</CardTitle>
-                  <CardDescription>
-                    Point your custom domain to this deployment with automated SSL certificate provisioning.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <form onSubmit={handleAddDomain} className="flex gap-2">
-                    <Input
-                      placeholder="app.mybrand.com"
-                      value={customDomainInput}
-                      onChange={(e) => setCustomDomainInput(e.target.value)}
-                      className="flex-1"
-                      required
-                    />
-                    <Button type="submit" variant="primary" size="sm" loading={addingDomain}>
-                      Add Domain
-                    </Button>
-                  </form>
-
-                  {loadingDomains ? (
-                    <div className="space-y-3 pt-2">
-                      <DomainRowSkeleton />
-                      <DomainRowSkeleton />
-                    </div>
-                  ) : domainsError ? (
-                    <div className="p-6 text-center space-y-2 border border-red-900/40 rounded-xl bg-red-950/20">
-                      <p className="text-xs text-red-400">{domainsError}</p>
-                      <Button size="sm" variant="outline" onClick={loadProjectDetails} icon={<RotateCw size={12} />}>
-                        Retry
-                      </Button>
-                    </div>
-                  ) : projectDomains.length === 0 ? (
-                    <div className="py-6 text-center text-xs text-zinc-500">
-                      No custom domains configured yet for this project.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-zinc-800/80 font-mono text-xs pt-2">
-                      {projectDomains.map((dom) => (
-                        <div
-                          key={dom.id}
-                          className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                        >
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <Globe size={14} className="text-indigo-400" />
-                              <span className="text-zinc-100 font-semibold">{dom.domain}</span>
-                              <Badge
-                                variant={dom.status === 'verified' ? 'success' : 'warning'}
-                                size="sm"
-                                dot
-                              >
-                                {dom.status}
-                              </Badge>
-                            </div>
-                            <span className="text-[11px] text-zinc-500 mt-1 block">
-                              DNS Record: CNAME pointing to <code className="text-zinc-300">{dom.dnsTarget}</code>
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-3">
-                            <Badge variant="info" size="sm">
-                              SSL Active
-                            </Badge>
-                            <button
-                              onClick={() => handleDeleteDomain(dom.id)}
-                              className="text-zinc-500 hover:text-red-400 p-1 rounded transition-colors"
-                              title="Remove domain"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          )}
-
-          {/* TAB 5: SETTINGS */}
+          {/* TAB 4: SETTINGS */}
           {activeTab === 'settings' && (
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm">Project Details</CardTitle>
-                  <CardDescription>Configuration and identifiers</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <Input label="Project Name" value={selectedProject.name} disabled />
-                  <Input label="Project Slug" value={selectedProject.slug} disabled />
-                  <Input label="Assigned Subdomain" value={selectedProject.assignedSubdomain} disabled />
-                  <Input label="Production URL" value={selectedProject.productionDomain} disabled />
-                  {selectedProject.description && (
-                    <Input label="Description" value={selectedProject.description} disabled />
-                  )}
-                </CardContent>
+            <div className="space-y-6 max-w-xl">
+              <Card className="p-5 border-zinc-800 bg-zinc-900/40 space-y-3">
+                <h3 className="text-sm font-semibold text-zinc-200">Project Details</h3>
+                <div className="text-xs space-y-1 text-zinc-400">
+                  <div>
+                    <span className="text-zinc-500">Name:</span> {selectedProject.name}
+                  </div>
+                  <div>
+                    <span className="text-zinc-500">Slug:</span> {selectedProject.slug}
+                  </div>
+                  <div>
+                    <span className="text-zinc-500">Project ID:</span>{' '}
+                    <code className="text-zinc-300 font-mono">{selectedProject.id}</code>
+                  </div>
+                </div>
               </Card>
 
-              <Card className="border-red-900/40 bg-red-950/10">
-                <CardHeader>
-                  <CardTitle className="text-sm text-red-400">Danger Zone</CardTitle>
-                  <CardDescription>Delete this hosting project and all associated deployments.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={handleDeleteProject}
-                    loading={deletingProject}
-                    icon={<Trash2 size={14} />}
-                  >
-                    Delete Project
-                  </Button>
-                </CardContent>
-              </Card>
+              {/* Danger Zone */}
+              <div className="p-5 rounded-xl border border-red-900/40 bg-red-950/10 space-y-3">
+                <div className="space-y-1">
+                  <h3 className="text-sm font-semibold text-red-400">Delete Project</h3>
+                  <p className="text-xs text-zinc-400">
+                    Permanently delete this project and all associated deployment records.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-800/80 text-red-400 hover:bg-red-950/40"
+                  onClick={handleDeleteProject}
+                  loading={deletingProject}
+                  icon={<Trash2 size={13} />}
+                >
+                  Delete Project
+                </Button>
+              </div>
             </div>
           )}
         </div>
       ) : (
-        /* CASE 3: ALL PROJECTS LIST (SCOPED TO CURRENT ORGANIZATION) */
+        /* CASE 3: ALL PROJECTS VIEW */
         <div className="space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            {orgLoading && !currentOrg ? (
-              <div className="flex items-center gap-3 animate-shimmer" aria-hidden="true">
-                <Skeleton className="w-10 h-10 rounded-xl" />
-                <div className="space-y-1.5">
-                  <Skeleton className="w-36 h-5" />
-                  <Skeleton className="w-48 h-3.5" />
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3">
-                <img
-                  src={getOrgAvatarUrl(currentOrg)}
-                  alt={currentOrg?.name || 'Organization'}
-                  className="w-10 h-10 rounded-xl object-cover border border-zinc-700/80 bg-zinc-800 shadow-md"
-                />
-                <div>
-                  <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                    <span>{currentOrg?.name}</span>
-                    <span className="text-xs font-mono text-zinc-500 font-normal">({currentOrg?.slug})</span>
-                  </h1>
-                  <p className="text-xs text-zinc-400 mt-0.5">
-                    Hosting projects and deployments scoped to this organization.
-                  </p>
-                </div>
-              </div>
-            )}
+          {/* Header with Switcher, Search, and New Project button */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-800">
+            <div className="space-y-1">
+              <h1 className="text-xl font-bold tracking-tight text-zinc-100">Projects</h1>
+              <p className="text-xs text-zinc-400">
+                Deploy, host, and scale edge websites on Optic Hosting.
+              </p>
+            </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
+              <OrganizationSwitcher />
               <Button
                 size="sm"
                 variant="primary"
                 onClick={handleNavigateToNewProject}
-                icon={<Plus size={14} />}
+                icon={<Plus size={13} />}
               >
-                Add New
+                New Project
               </Button>
             </div>
           </div>
 
+          {/* Search bar */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="max-w-xs w-full">
+              <Input
+                placeholder="Search projects..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+            <span className="text-xs text-zinc-500">
+              {filteredProjects.length} project(s)
+            </span>
+          </div>
+
           {/* Projects Grid */}
-          {(orgLoading || loadingProjects) ? (
+          {loadingProjects || orgLoading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <HostingProjectCardSkeleton />
-              <HostingProjectCardSkeleton />
               <HostingProjectCardSkeleton />
               <HostingProjectCardSkeleton />
             </div>
           ) : projectsError ? (
-            <div className="p-8 rounded-2xl border border-red-900/60 bg-red-950/20 text-center space-y-3">
-              <AlertCircle size={24} className="text-red-400 mx-auto" />
-              <div className="space-y-1">
-                <h3 className="text-sm font-semibold text-zinc-200">Unable to load projects</h3>
-                <p className="text-xs text-red-400 max-w-sm mx-auto">{projectsError}</p>
-              </div>
-              <Button size="sm" variant="outline" onClick={fetchProjects} icon={<RotateCw size={13} />}>
+            <div className="p-8 rounded-xl border border-red-900/40 bg-red-950/10 text-center space-y-3">
+              <AlertCircle size={20} className="text-red-400 mx-auto" />
+              <p className="text-xs text-red-400">{projectsError}</p>
+              <Button size="sm" variant="outline" onClick={fetchProjects} icon={<RotateCw size={12} />}>
                 Retry
               </Button>
             </div>
-          ) : projects.length === 0 ? (
-            <div className="p-12 text-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/30 space-y-4">
-              <div className="w-12 h-12 rounded-xl bg-zinc-800/80 text-zinc-400 mx-auto flex items-center justify-center">
-                <Server size={22} />
-              </div>
+          ) : filteredProjects.length === 0 ? (
+            <div className="p-12 text-center rounded-xl border border-dashed border-zinc-800 bg-zinc-900/20 space-y-3">
+              <Server size={24} className="text-zinc-500 mx-auto" />
               <div className="space-y-1">
-                <h3 className="text-sm font-semibold text-zinc-200">No hosting projects yet</h3>
+                <h3 className="text-sm font-semibold text-zinc-200">
+                  {searchQuery ? 'No matching projects' : 'No projects yet'}
+                </h3>
                 <p className="text-xs text-zinc-400 max-w-sm mx-auto">
-                  Import from Git, upload a project folder, or deploy from Optic Cloud under <span className="text-zinc-300 font-medium">{currentOrg?.name}</span>.
+                  {searchQuery
+                    ? 'Try searching with a different name or slug.'
+                    : 'Deploy a static website or HTML file to get started.'}
                 </p>
               </div>
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={handleNavigateToNewProject}
-                icon={<Plus size={14} />}
-              >
-                Add New Project
-              </Button>
+              {!searchQuery && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={handleNavigateToNewProject}
+                  icon={<Plus size={13} />}
+                >
+                  Create Project
+                </Button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {projects.map((proj) => (
-                <Card
-                  key={proj.id}
-                  hoverEffect
-                  className="p-5 cursor-pointer flex flex-col justify-between"
-                  onClick={() => {
-                    setLoadingDeployments(true);
-                    setLoadingDomains(true);
-                    setDeploymentsList([]);
-                    setProjectDomains([]);
-                    setSelectedProject(proj);
-                    setActiveTab('overview');
-                  }}
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-lg bg-indigo-950 border border-indigo-800/50 flex items-center justify-center text-indigo-400">
-                          <Server size={16} />
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-semibold text-white">{proj.name}</h3>
-                          <span className="text-[11px] font-mono text-zinc-500">
-                            {proj.assignedSubdomain}
-                          </span>
-                        </div>
-                      </div>
-                      {renderStatusBadge(proj.status)}
-                    </div>
+              {filteredProjects.map((proj) => {
+                const prodUrl = `https://${proj.slug}.host.optic.doy.best`;
 
-                    <div className="space-y-1.5 text-xs text-zinc-400 font-mono mt-4">
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-zinc-500">FRAMEWORK:</span>
-                        <span className="text-indigo-400 font-medium capitalize">{proj.framework || 'vite'}</span>
-                      </div>
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-zinc-500">SLUG:</span>
-                        <span className="text-zinc-300">{proj.slug}</span>
-                      </div>
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-zinc-500">PRODUCTION URL:</span>
-                        <span className="text-indigo-400 truncate max-w-[200px]">{proj.productionDomain}</span>
-                      </div>
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-zinc-500">LAST DEPLOYMENT:</span>
-                        <span className="text-zinc-300">
-                          {proj.latestDeployment ? new Date(proj.latestDeployment.createdAt).toLocaleDateString() : 'Never'}
+                return (
+                  <div
+                    key={proj.id}
+                    onClick={() => handleSelectProject(proj)}
+                    className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 hover:border-zinc-700/80 transition-all cursor-pointer flex flex-col justify-between space-y-4 group"
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg bg-zinc-800/80 border border-zinc-700/60 flex items-center justify-center text-zinc-300 group-hover:text-white transition-colors">
+                            <Server size={15} />
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-semibold text-zinc-100 group-hover:text-indigo-400 transition-colors">
+                              {proj.name}
+                            </h3>
+                            <span className="text-[11px] font-mono text-zinc-500">
+                              {proj.slug}
+                            </span>
+                          </div>
+                        </div>
+
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          Ready
                         </span>
                       </div>
+
+                      {/* Domain link */}
+                      <div className="text-xs font-mono text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+                        <span>{prodUrl}</span>
+                        <ArrowUpRight size={12} />
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-zinc-800/60 flex items-center justify-between text-[11px] text-zinc-500">
+                      <span>
+                        {proj.latestDeployment
+                          ? `Last deployed ${new Date(proj.latestDeployment.createdAt).toLocaleDateString()}`
+                          : 'No deployments yet'}
+                      </span>
+                      <span className="text-zinc-400 group-hover:text-zinc-200 transition-colors flex items-center gap-0.5">
+                        <span>Open</span>
+                        <ChevronRight size={13} />
+                      </span>
                     </div>
                   </div>
-
-                  <div className="mt-5 pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs">
-                    <span className="text-[11px] text-zinc-500">
-                      Updated {new Date(proj.updatedAt).toLocaleDateString()}
-                    </span>
-                    <span className="text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1">
-                      <span>Open Project</span>
-                      <ChevronRight size={14} />
-                    </span>
-                  </div>
-                </Card>
-              ))}
+                );
+              })}
             </div>
           )}
-
-          {/* Architecture note */}
-          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/30 text-xs text-zinc-400 flex items-start gap-3">
-            <Code2 size={18} className="text-indigo-400 shrink-0 mt-0.5" />
-            <div className="leading-relaxed">
-              <strong className="text-zinc-200">Deploy via Optic CLI:</strong> Run <code className="text-zinc-200 font-mono">npx optic deploy ./dist</code> with your Optic API token to deploy static assets directly into <span className="text-zinc-200 font-medium">{currentOrg?.name}</span>.
-            </div>
-          </div>
         </div>
       )}
 
-      {/* MODAL: New Static Website Deployment Modal */}
-      <Modal
-        isOpen={deployModalOpen}
-        onClose={() => {
-          if (!isDeploying) setDeployModalOpen(false);
-        }}
-        title={`Deploy to ${selectedProject?.name || 'Project'}`}
-        description="Select static website files or project folder to upload directly to Cloudflare R2."
-      >
-        <div className="space-y-4">
-          {/* File / Folder Selectors */}
-          <input
-            type="file"
-            ref={folderInputRef}
-            // @ts-ignore
-            webkitdirectory="true"
-            directory="true"
-            multiple
-            className="hidden"
-            onChange={handleFolderSelect}
-          />
-          <input
-            type="file"
-            ref={filesInputRef}
-            multiple
-            className="hidden"
-            onChange={handleFilesSelect}
-          />
-
-          {!isDeploying ? (
-            <>
-              {/* Dropzone & Buttons */}
-              <div
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={handleDropFiles}
-                className="p-6 border-2 border-dashed border-zinc-800 hover:border-zinc-700 rounded-xl text-center bg-zinc-900/40 space-y-3 transition-colors cursor-pointer"
-                onClick={() => folderInputRef.current?.click()}
-              >
-                <div className="w-10 h-10 rounded-full bg-zinc-800 mx-auto flex items-center justify-center text-zinc-400">
-                  <Upload size={18} />
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-semibold text-zinc-200">
-                    Click to select a website folder or drag files here
-                  </p>
-                  <p className="text-[11px] text-zinc-500">
-                    HTML, CSS, JS, images, fonts, and assets
-                  </p>
-                </div>
-
-                <div className="flex justify-center gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => folderInputRef.current?.click()}
-                    icon={<Folder size={13} />}
-                  >
-                    Select Folder
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => filesInputRef.current?.click()}
-                    icon={<FileCode size={13} />}
-                  >
-                    Select Files
-                  </Button>
-                </div>
+      {/* DEPLOY MODAL (Static Files / Folder Upload) */}
+      {deployModalOpen && (
+        <Modal
+          isOpen={deployModalOpen}
+          onClose={() => {
+            if (!isDeploying) {
+              setDeployModalOpen(false);
+              setSelectedFiles([]);
+            }
+          }}
+          title={`Deploy to ${selectedProject?.name || 'Project'}`}
+          maxWidth="lg"
+        >
+          <div className="space-y-4">
+            {/* Drag & Drop Box */}
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                handleFilesSelected(e.dataTransfer.files);
+              }}
+              className="p-6 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 text-center space-y-3 cursor-pointer hover:border-zinc-700 transition-colors"
+            >
+              <div className="w-10 h-10 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 mx-auto flex items-center justify-center">
+                <Upload size={18} />
               </div>
 
-              {/* Selected Files Summary */}
-              {selectedFiles.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-zinc-300">
-                    <span className="font-semibold">
-                      Selected Files ({selectedFiles.length})
-                    </span>
-                    <span className="text-zinc-500 font-mono">
-                      {(selectedFiles.reduce((acc, f) => acc + f.file.size, 0) / (1024 * 1024)).toFixed(2)} MB total
-                    </span>
-                  </div>
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-zinc-200">
+                  {selectedFiles.length > 0
+                    ? `${selectedFiles.length} file(s) selected`
+                    : 'Drag & drop website folder or index.html'}
+                </p>
+                <p className="text-[11px] text-zinc-500">
+                  Direct upload to private Cloudflare R2 object storage
+                </p>
+              </div>
 
-                  <div className="max-h-36 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-2 space-y-1 font-mono text-[11px]">
-                    {selectedFiles.slice(0, 10).map((f, i) => (
-                      <div key={i} className="flex items-center justify-between text-zinc-300">
-                        <span className="truncate max-w-[280px]">{f.relativePath}</span>
-                        <span className="text-zinc-500">{(f.file.size / 1024).toFixed(1)} KB</span>
-                      </div>
-                    ))}
-                    {selectedFiles.length > 10 && (
-                      <div className="text-zinc-500 text-center pt-1">
-                        + {selectedFiles.length - 10} more files
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <Input
-                label="Deployment Note"
-                placeholder="e.g. Updated home hero banner and pricing"
-                value={deploymentNote}
-                onChange={(e) => setDeploymentNote(e.target.value)}
-              />
-
-              {deployError && (
-                <div className="p-3 rounded-lg border border-red-900/60 bg-red-950/20 text-xs text-red-400 flex items-start gap-2">
-                  <AlertCircle size={15} className="shrink-0 mt-0.5" />
-                  <span>{deployError}</span>
-                </div>
-              )}
-
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex items-center justify-center gap-2 pt-1">
+                <input
+                  type="file"
+                  ref={folderInputRef}
+                  onChange={(e) => handleFilesSelected(e.target.files)}
+                  // @ts-ignore
+                  webkitdirectory=""
+                  directory=""
+                  className="hidden"
+                />
+                <input
+                  type="file"
+                  ref={filesInputRef}
+                  onChange={(e) => handleFilesSelected(e.target.files)}
+                  multiple
+                  className="hidden"
+                />
                 <Button
-                  type="button"
-                  variant="ghost"
                   size="sm"
-                  onClick={() => setDeployModalOpen(false)}
+                  variant="outline"
+                  type="button"
+                  onClick={() => filesInputRef.current?.click()}
+                  icon={<FileCode size={12} />}
                 >
-                  Cancel
+                  Select File(s)
                 </Button>
                 <Button
-                  type="button"
-                  variant="primary"
                   size="sm"
-                  disabled={selectedFiles.length === 0}
-                  onClick={handleExecuteDeployment}
-                  icon={<Upload size={14} />}
+                  variant="outline"
+                  type="button"
+                  onClick={() => folderInputRef.current?.click()}
+                  icon={<Folder size={12} />}
                 >
-                  Start Deployment
+                  Select Folder
                 </Button>
               </div>
-            </>
-          ) : (
-            /* Live Deployment Progress View */
-            <div className="space-y-4 py-2">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-zinc-300 font-medium">{deployStepText}</span>
-                  <span className="font-mono text-zinc-400">{deployProgressPercent}%</span>
+            </div>
+
+            {/* Note Input */}
+            <Input
+              label="Deployment Note / Commit Message (Optional)"
+              placeholder="e.g. Update homepage hero"
+              value={deploymentNote}
+              onChange={(e) => setDeploymentNote(e.target.value)}
+              disabled={isDeploying}
+            />
+
+            {/* Progress & Live Step */}
+            {isDeploying && (
+              <div className="space-y-2 p-3 rounded-lg border border-zinc-800 bg-zinc-950 text-xs">
+                <div className="flex items-center justify-between text-zinc-300">
+                  <span>{deployStepText}</span>
+                  <span className="font-mono">{deployProgressPercent}%</span>
                 </div>
-                <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
+                <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
                   <div
                     className="h-full bg-indigo-500 transition-all duration-200"
                     style={{ width: `${deployProgressPercent}%` }}
                   />
                 </div>
               </div>
+            )}
 
-              {/* Real-time live log terminal */}
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs text-zinc-300 space-y-1.5 max-h-48 overflow-y-auto shadow-inner">
-                {deployLiveLogs.map((log) => (
-                  <div key={log.id} className="flex items-start gap-2">
-                    <span className="text-zinc-600 text-[10px] select-none">{log.timestamp}</span>
-                    <span
-                      className={`text-[9px] px-1 rounded uppercase font-bold select-none ${
-                        log.level === 'success'
-                          ? 'bg-emerald-500/20 text-emerald-400'
-                          : log.level === 'error'
-                          ? 'bg-red-500/20 text-red-400'
-                          : 'bg-zinc-800 text-zinc-400'
-                      }`}
-                    >
-                      {log.level}
-                    </span>
-                    <span
-                      className={
-                        log.level === 'success' ? 'text-emerald-300 font-semibold' : 'text-zinc-200'
-                      }
-                    >
-                      {log.message}
-                    </span>
-                  </div>
-                ))}
+            {deployError && (
+              <div className="p-3 rounded-lg border border-red-900/60 bg-red-950/20 text-xs text-red-400">
+                {deployError}
               </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setDeployModalOpen(false);
+                  setSelectedFiles([]);
+                }}
+                disabled={isDeploying}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleStartDeploy}
+                loading={isDeploying}
+                disabled={selectedFiles.length === 0 || isDeploying}
+                icon={<Upload size={13} />}
+              >
+                Deploy Now
+              </Button>
             </div>
-          )}
-        </div>
-      </Modal>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };

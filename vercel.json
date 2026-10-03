@@ -42,32 +42,102 @@
       "destination": "/api/deployments?path=:path*"
     },
     {
+      "source": "/api/cloud",
+      "destination": "/api/cloud"
+    },
+    {
+      "source": "/api/cloud/",
+      "destination": "/api/cloud"
+    },
+    {
       "source": "/api/cloud/:path*",
       "destination": "/api/cloud"
+    },
+    {
+      "source": "/api/hosting",
+      "destination": "/api/hosting"
+    },
+    {
+      "source": "/api/hosting/",
+      "destination": "/api/hosting"
     },
     {
       "source": "/api/hosting/:path*",
       "destination": "/api/hosting"
     },
     {
+      "source": "/api/storage",
+      "destination": "/api/storage"
+    },
+    {
+      "source": "/api/storage/",
+      "destination": "/api/storage"
+    },
+    {
       "source": "/api/storage/:path*",
       "destination": "/api/storage"
+    },
+    {
+      "source": "/api/keys",
+      "destination": "/api/keys"
+    },
+    {
+      "source": "/api/keys/",
+      "destination": "/api/keys"
     },
     {
       "source": "/api/keys/:path*",
       "destination": "/api/keys"
     },
     {
+      "source": "/api/share",
+      "destination": "/api/share"
+    },
+    {
+      "source": "/api/share/",
+      "destination": "/api/share"
+    },
+    {
       "source": "/api/share/:path*",
       "destination": "/api/share"
+    },
+    {
+      "source": "/api/organizations",
+      "destination": "/api/organizations"
+    },
+    {
+      "source": "/api/organizations/",
+      "destination": "/api/organizations"
     },
     {
       "source": "/api/organizations/:path*",
       "destination": "/api/organizations"
     },
     {
+      "source": "/api/domains",
+      "destination": "/api/domains"
+    },
+    {
+      "source": "/api/domains/",
+      "destination": "/api/domains"
+    },
+    {
       "source": "/api/domains/:path*",
       "destination": "/api/domains"
+    },
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "(.*)\\.host\\.(.*)"
+        }
+      ],
+      "destination": "/api/deployments"
+    },
+    {
+      "source": "/",
+      "destination": "/index.html"
     },
     {
       "source": "/:path*",

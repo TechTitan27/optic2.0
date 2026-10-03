@@ -159,6 +159,7 @@ export interface CachedDeployment {
 }
 
 const memoryDeployments = new Map<string, CachedDeployment>();
+const projectProductionMap = new Map<string, string>();
 
 export function cacheDeploymentRecord(record: CachedDeployment) {
   memoryDeployments.set(record.id, record);
@@ -168,14 +169,122 @@ export function getCachedDeployment(deploymentId: string): CachedDeployment | un
   return memoryDeployments.get(deploymentId);
 }
 
+export function setProductionDeployment(projectId: string, deploymentId: string, slug?: string) {
+  projectProductionMap.set(projectId, deploymentId);
+  if (slug) {
+    projectProductionMap.set(slug.toLowerCase().trim(), deploymentId);
+  }
+}
+
+export function getProductionDeployment(idOrSlug: string): string | undefined {
+  const clean = idOrSlug.toLowerCase().trim();
+  return projectProductionMap.get(idOrSlug) || projectProductionMap.get(clean);
+}
+
 /**
- * Extracts deploymentId and relative subpath from any URL or rewrite format.
+ * Resolves the active production deployment ID for a project (by slug or ID).
+ * Priority: memory cache -> R2 metadata pointer -> Supabase latest ready deployment.
  */
-export function extractDeploymentInfo(req: IncomingMessage): {
+export async function resolveProductionDeploymentId(
+  slugOrId: string,
+  options?: DeploymentServerOptions
+): Promise<string | null> {
+  const clean = slugOrId.toLowerCase().trim();
+  const cached = getProductionDeployment(clean);
+  if (cached) return cached;
+
+  const r2Client = options?.r2Client || getR2Client();
+  const r2Config = options?.r2Config || getR2Config();
+
+  // 1. Check R2 for explicit production pointer
+  if (r2Client && r2Config.bucketName) {
+    try {
+      const getCmd = new GetObjectCommand({
+        Bucket: r2Config.bucketName,
+        Key: `projects/${clean}/production.json`,
+      });
+      const res = await r2Client.send(getCmd);
+      if (res.Body) {
+        let text = '';
+        if (typeof (res.Body as any).transformToString === 'function') {
+          text = await (res.Body as any).transformToString('utf-8');
+        } else if (typeof (res.Body as any).transformToByteArray === 'function') {
+          const bytes = await (res.Body as any).transformToByteArray();
+          text = Buffer.from(bytes).toString('utf-8');
+        }
+        if (text) {
+          const parsed = JSON.parse(text);
+          if (parsed?.productionDeploymentId) {
+            setProductionDeployment(parsed.projectId || clean, parsed.productionDeploymentId, clean);
+            return parsed.productionDeploymentId;
+          }
+        }
+      }
+    } catch {
+      // Pointer file not present in R2
+    }
+  }
+
+  // 2. Query Supabase for project and its latest ready deployment
+  const sb = options?.supabase || getSupabaseServerClient();
+  if (sb) {
+    try {
+      const { data: proj } = await sb
+        .from('projects')
+        .select('id, organization_id, slug')
+        .or(`slug.eq.${clean},id.eq.${clean}`)
+        .maybeSingle();
+
+      if (proj) {
+        // Query latest ready deployment
+        const { data: dep } = await sb
+          .from('deployments')
+          .select('id, status')
+          .eq('project_id', proj.id)
+          .eq('status', 'ready')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (dep?.id) {
+          setProductionDeployment(proj.id, dep.id, proj.slug);
+          return dep.id;
+        }
+      }
+    } catch (err: any) {
+      console.warn('[Optic Hosting] Production deployment lookup notice:', err.message);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extracts deploymentId and relative subpath from any URL, rewrite format, or custom host.
+ * Supports:
+ * 1. Host-based project URLs: https://my-project.host.optic.doy.best/ -> project slug -> production deployment
+ * 2. Host-based immutable URLs: https://<deployment-id>.host.optic.doy.best/ -> direct deployment ID
+ * 3. Public API paths: /api/deployments/:deploymentId/*
+ */
+export async function resolveRequestTarget(
+  req: IncomingMessage,
+  options?: DeploymentServerOptions
+): Promise<{
   deploymentId: string;
   rawSubpath: string;
   rawUrl: string;
-} {
+  isHostRouting: boolean;
+  projectSlug?: string;
+}> {
+  const host = (
+    (req.headers['x-forwarded-host'] as string) ||
+    (req.headers['host'] as string) ||
+    ''
+  )
+    .toLowerCase()
+    .trim()
+    .split(':')[0];
+
   const headerUri =
     (req.headers['x-forwarded-uri'] as string) ||
     (req.headers['x-original-url'] as string) ||
@@ -183,56 +292,69 @@ export function extractDeploymentInfo(req: IncomingMessage): {
     (req.headers['x-vercel-matched-path'] as string) ||
     '';
   const reqUrl = req.url || '';
+  const candidate = (headerUri && headerUri.includes('/api/deployments')) ? headerUri : reqUrl;
 
-  // Determine candidate string for path parsing
-  let candidate = '';
-  if (headerUri && headerUri.includes('/api/deployments')) {
-    candidate = headerUri;
-  } else {
-    candidate = reqUrl;
+  const parsed = new URL(candidate, 'http://localhost');
+  const pathname = parsed.pathname;
+
+  // 1. Host-based wildcard routing check: *.host.optic.doy.best or *.host.localhost
+  const hostMatch = host.match(/^([a-z0-9_-]+)\.host\.(?:optic\.doy\.best|localhost)$/i);
+  if (hostMatch) {
+    const subdomain = hostMatch[1].toLowerCase();
+    const rawSubpath = pathname.replace(/^\/+/, '');
+
+    // Is subdomain a deployment ID (UUID or known cached deployment)?
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(subdomain);
+    if (isUuid || getCachedDeployment(subdomain)) {
+      return {
+        deploymentId: subdomain,
+        rawSubpath,
+        rawUrl: candidate || reqUrl,
+        isHostRouting: true,
+      };
+    }
+
+    // Subdomain is a project slug: resolve production deployment ID
+    const prodDepId = await resolveProductionDeploymentId(subdomain, options);
+    return {
+      deploymentId: prodDepId || '',
+      rawSubpath,
+      rawUrl: candidate || reqUrl,
+      isHostRouting: true,
+      projectSlug: subdomain,
+    };
   }
 
+  // 2. Standard /api/deployments/:deploymentId/* parsing
   let deploymentId = '';
   let rawSubpath = '';
 
-  try {
-    const parsed = new URL(candidate, 'http://localhost');
-    const pathname = parsed.pathname;
+  const match = pathname.match(/^\/api\/deployments(?:\/([^/]+))?(?:\/(.*))?$/);
+  if (match && match[1]) {
+    deploymentId = match[1];
+    rawSubpath = match[2] || '';
+  }
 
-    // Pattern: /api/deployments/:deploymentId or /api/deployments/:deploymentId/*
-    const match = pathname.match(/^\/api\/deployments(?:\/([^/]+))?(?:\/(.*))?$/);
-    if (match && match[1]) {
-      deploymentId = match[1];
-      rawSubpath = match[2] || '';
+  // Check query params if not found via pathname
+  if (!deploymentId) {
+    const depIdParam = parsed.searchParams.get('deploymentId');
+    if (depIdParam) {
+      deploymentId = depIdParam;
     }
-
-    // Check query params if not found via pathname
-    if (!deploymentId) {
-      const depIdParam = parsed.searchParams.get('deploymentId');
-      if (depIdParam) {
-        deploymentId = depIdParam;
-      }
-      const subpathParam = parsed.searchParams.get('subpath');
-      if (subpathParam) {
-        rawSubpath = subpathParam;
-      }
-      const pathParam = parsed.searchParams.get('path');
-      if (pathParam && !deploymentId) {
-        const parts = pathParam.replace(/^\/+/, '').split('/');
-        deploymentId = parts[0] || '';
-        rawSubpath = parts.slice(1).join('/');
-      }
-    } else if (!rawSubpath) {
-      const subpathParam = parsed.searchParams.get('subpath');
-      if (subpathParam) {
-        rawSubpath = subpathParam;
-      }
+    const subpathParam = parsed.searchParams.get('subpath');
+    if (subpathParam) {
+      rawSubpath = subpathParam;
     }
-  } catch {
-    const match = candidate.match(/\/api\/deployments\/([^/?#]+)(?:\/([^?#]*))?/);
-    if (match) {
-      deploymentId = match[1] || '';
-      rawSubpath = match[2] || '';
+    const pathParam = parsed.searchParams.get('path');
+    if (pathParam && !deploymentId) {
+      const parts = pathParam.replace(/^\/+/, '').split('/');
+      deploymentId = parts[0] || '';
+      rawSubpath = parts.slice(1).join('/');
+    }
+  } else if (!rawSubpath) {
+    const subpathParam = parsed.searchParams.get('subpath');
+    if (subpathParam) {
+      rawSubpath = subpathParam;
     }
   }
 
@@ -240,12 +362,16 @@ export function extractDeploymentInfo(req: IncomingMessage): {
     deploymentId,
     rawSubpath,
     rawUrl: candidate || reqUrl,
+    isHostRouting: false,
   };
 }
 
 /**
  * Handles incoming public static file requests for ready deployments.
- * Route pattern: /api/deployments/:deploymentId/*
+ * Route patterns:
+ * - https://my-project.host.optic.doy.best/*
+ * - https://<deployment-id>.host.optic.doy.best/*
+ * - /api/deployments/:deploymentId/*
  */
 export async function handleDeploymentRequest(
   req: IncomingMessage,
@@ -261,7 +387,8 @@ export async function handleDeploymentRequest(
     return;
   }
 
-  const { deploymentId, rawSubpath, rawUrl } = extractDeploymentInfo(req);
+  const { deploymentId, rawSubpath, rawUrl, isHostRouting, projectSlug } =
+    await resolveRequestTarget(req, options);
 
   // Security Check: Traversal in raw URL
   if (
@@ -279,9 +406,20 @@ export async function handleDeploymentRequest(
   if (!deploymentId) {
     console.error('[DEPLOYMENT_SERVE_FAILED]', {
       url: rawUrl,
-      reason: 'URL pattern does not match /api/deployments/:deploymentId/*',
+      isHostRouting,
+      projectSlug,
+      reason: isHostRouting
+        ? `No ready production deployment found for project "${projectSlug}"`
+        : 'URL pattern does not match /api/deployments/:deploymentId/*',
     });
-    return sendHtmlPage(res, 404, 'Invalid Request', 'Deployment endpoint not recognized.');
+    return sendHtmlPage(
+      res,
+      404,
+      isHostRouting ? 'No Production Deployment' : 'Invalid Request',
+      isHostRouting
+        ? `The project "${projectSlug}" does not have an active production deployment yet.`
+        : 'Deployment endpoint not recognized.'
+    );
   }
 
   // Prevent Path Traversal in subpath
@@ -312,6 +450,7 @@ export async function handleDeploymentRequest(
     url: rawUrl,
     deploymentId,
     subpath: decodedSubpath,
+    isHostRouting,
   });
 
   // 2. Database & Cache Lookup: Verify deployment exists and is ready
