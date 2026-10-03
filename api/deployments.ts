@@ -9,9 +9,11 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   const subpathParam = parsed.searchParams.get('subpath');
 
   if (depIdParam) {
-    req.url = `/api/deployments/${depIdParam}/${subpathParam || ''}${parsed.search}`;
+    const sub = subpathParam ? (subpathParam.startsWith('/') ? subpathParam : `/${subpathParam}`) : '/';
+    req.url = `/api/deployments/${depIdParam}${sub}`;
   } else if (pathParam) {
-    req.url = `/api/deployments/${pathParam}${parsed.search}`;
+    const cleanPath = pathParam.startsWith('/') ? pathParam : `/${pathParam}`;
+    req.url = `/api/deployments${cleanPath}`;
   } else if (!url.startsWith('/api/deployments')) {
     req.url = `/api/deployments${url.startsWith('/') ? '' : '/'}${url}`;
   }

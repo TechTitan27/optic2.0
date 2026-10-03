@@ -930,6 +930,13 @@ export const supabaseData = {
       throw error;
     }
 
+    console.log('[PROJECT_CREATED]', {
+      projectId: projectData.id,
+      organizationId: projectData.organization_id || orgId,
+      name: projectData.name,
+      slug: projectData.slug,
+    });
+
     const newProject: HostingProject = {
       id: projectData.id,
       organization_id: projectData.organization_id || orgId,
@@ -1108,6 +1115,15 @@ export const supabaseData = {
       console.error('[Supabase] Failed to insert deployment record:', error);
       throw error;
     }
+
+    console.log('[DEPLOYMENT_CREATED]', {
+      deploymentId: data.id,
+      projectId: data.project_id,
+      organizationId: data.organization_id,
+      status: data.status,
+      storagePath: data.storage_path,
+      deploymentUrl: data.deployment_url,
+    });
 
     return {
       id: data.id,

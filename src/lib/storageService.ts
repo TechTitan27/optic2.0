@@ -151,9 +151,16 @@ export class OpticStorageService {
       });
     }
 
-    const data = await res.json();
+    let data: any = {};
+    const text = await res.text();
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Server returned HTTP ${res.status}: ${text.slice(0, 150)}`);
+    }
+
     if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to generate deployment upload URL');
+      throw new Error(data.error || `Failed to generate deployment upload URL (HTTP ${res.status})`);
     }
 
     return {
@@ -161,6 +168,62 @@ export class OpticStorageService {
       storageKey: data.storageKey,
       expiresIn: data.expiresIn || 900,
     };
+  }
+
+  /**
+   * Finalize and verify static website deployment in Cloudflare R2
+   */
+  async finalizeDeployment(params: {
+    organizationId: string;
+    projectId: string;
+    deploymentId: string;
+    filePath?: string;
+  }): Promise<{
+    success: boolean;
+    ready?: boolean;
+    size?: number;
+    storageKey?: string;
+    completedAt?: string;
+    error?: string;
+  }> {
+    const token = await this.getAuthToken();
+    if (!token) {
+      throw new Error('You must be signed in to finalize deployment.');
+    }
+
+    let res = await fetch('/api/hosting?action=finalize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(params),
+    });
+
+    if (res.status === 404) {
+      res = await fetch('/api/hosting/finalize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(params),
+      });
+    }
+
+    let data: any = {};
+    const text = await res.text();
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Server returned HTTP ${res.status}: ${text.slice(0, 150)}`);
+    }
+
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || `Failed to finalize deployment (HTTP ${res.status})`);
+    }
+
+    return data;
   }
 
   /**
@@ -191,9 +254,10 @@ export class OpticStorageService {
           if (onProgress) onProgress(100);
           resolve();
         } else {
+          const detail = xhr.responseText ? `: ${xhr.responseText.slice(0, 150)}` : '';
           reject(
             new Error(
-              `Cloudflare R2 returned status ${xhr.status}: ${xhr.statusText || 'Direct upload rejected'}`
+              `Cloudflare R2 returned status ${xhr.status} (${xhr.statusText || 'Direct upload rejected'})${detail}`
             )
           );
         }

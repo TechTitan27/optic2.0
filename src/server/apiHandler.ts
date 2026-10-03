@@ -14,8 +14,9 @@ import {
   cleanupOrphanedObject,
   createDeploymentPresignedUploadUrl,
   createSharePresignedUrls,
+  verifyR2DeploymentFile,
 } from './r2Storage.js';
-import { handleDeploymentRequest } from './deploymentServer.js';
+import { handleDeploymentRequest, cacheDeploymentRecord } from './deploymentServer.js';
 
 interface WaitlistEntry {
   email: string;
@@ -581,6 +582,122 @@ export async function handleApiRequest(
           ? 503
           : 500;
       return sendJson(res, status, { success: false, error: message });
+    }
+  }
+
+  // 7c. POST /api/hosting/finalize or /api/hosting?action=finalize
+  if (
+    ((pathname === '/api/hosting' && action === 'finalize') ||
+      pathname.startsWith('/api/hosting/finalize')) &&
+    method === 'POST'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+
+      if (!user) {
+        return sendJson(res, 401, {
+          success: false,
+          error: 'Unauthorized. Please sign in to finalize deployments.',
+        });
+      }
+
+      const body = await parseJsonBody(req);
+      const { organizationId, projectId, deploymentId, filePath = 'index.html' } = body;
+
+      if (!organizationId || !projectId || !deploymentId) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'organizationId, projectId, and deploymentId are required.',
+        });
+      }
+
+      const verification = await verifyR2DeploymentFile({
+        organizationId,
+        projectId,
+        deploymentId,
+        filePath,
+      });
+
+      if (!verification.exists) {
+        console.error('[R2_UPLOAD_FAILED]', {
+          deploymentId,
+          projectId,
+          organizationId,
+          storageKey: verification.storageKey,
+          error: verification.error || 'Object not found in R2',
+        });
+
+        // Mark as failed in Supabase
+        const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+        const sb = getSupabaseServerClient(token);
+        if (sb) {
+          await sb
+            .from('deployments')
+            .update({ status: 'failed', completed_at: new Date().toISOString() })
+            .eq('id', deploymentId);
+        }
+
+        return sendJson(res, 400, {
+          success: false,
+          error: `R2 verification failed: file "${filePath}" does not exist in Cloudflare R2 bucket at ${verification.storageKey}. Details: ${verification.error || 'Not found'}`,
+        });
+      }
+
+      console.log('[R2_UPLOAD_SUCCESS]', {
+        deploymentId,
+        projectId,
+        organizationId,
+        storageKey: verification.storageKey,
+        size: verification.size,
+      });
+
+      // Update deployment status to ready in public.deployments
+      const completedAt = new Date().toISOString();
+      const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+      const sb = getSupabaseServerClient(token);
+      if (sb) {
+        const { error: updateErr } = await sb
+          .from('deployments')
+          .update({ status: 'ready', completed_at: completedAt })
+          .eq('id', deploymentId);
+
+        if (updateErr) {
+          console.warn('[Supabase] Warning updating deployment status to ready:', updateErr.message);
+        }
+      }
+
+      // Update in-memory deployment cache for instant public serving
+      cacheDeploymentRecord({
+        id: deploymentId,
+        project_id: projectId,
+        organization_id: organizationId,
+        status: 'ready',
+        storage_path: `deployments/${organizationId}/${projectId}/${deploymentId}`,
+        createdAt: Date.now(),
+      });
+
+      console.log('[DEPLOYMENT_READY]', {
+        deploymentId,
+        projectId,
+        organizationId,
+        status: 'ready',
+        completedAt,
+      });
+
+      return sendJson(res, 200, {
+        success: true,
+        ready: true,
+        size: verification.size,
+        storageKey: verification.storageKey,
+        completedAt,
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/finalize] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to finalize deployment',
+      });
     }
   }
 

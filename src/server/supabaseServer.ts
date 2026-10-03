@@ -39,7 +39,7 @@ let lastServerKey: string = '';
 export function getSupabaseServerClient(userToken?: string): SupabaseClient | null {
   const serviceKey = getSupabaseSecretKey();
   const anonKey = getSupabaseAnonKey();
-  const keyToUse = serviceKey || userToken || anonKey;
+  const keyToUse = serviceKey || anonKey;
   if (!keyToUse) return null;
 
   const url = getSupabaseUrl();

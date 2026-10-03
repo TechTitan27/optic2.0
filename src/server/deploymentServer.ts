@@ -150,6 +150,25 @@ export interface DeploymentServerOptions {
   r2Config?: { bucketName: string; isConfigured: boolean };
 }
 
+export interface CachedDeployment {
+  id: string;
+  project_id: string;
+  organization_id: string;
+  status: string;
+  storage_path: string;
+  createdAt: number;
+}
+
+const memoryDeployments = new Map<string, CachedDeployment>();
+
+export function cacheDeploymentRecord(record: CachedDeployment) {
+  memoryDeployments.set(record.id, record);
+}
+
+export function getCachedDeployment(deploymentId: string): CachedDeployment | undefined {
+  return memoryDeployments.get(deploymentId);
+}
+
 /**
  * Handles incoming public static file requests for ready deployments.
  * Route pattern: /api/deployments/:deploymentId/*
@@ -183,72 +202,75 @@ export async function handleDeploymentRequest(
   // Match /api/deployments/:deploymentId or /api/deployments/:deploymentId/*
   const match = pathname.match(/^\/api\/deployments\/([^/]+)(?:\/(.*))?$/);
   if (!match) {
+    console.error('[DEPLOYMENT_SERVE_FAILED]', {
+      url: rawUrl,
+      reason: 'URL pattern does not match /api/deployments/:deploymentId/*',
+    });
     return sendHtmlPage(res, 404, 'Invalid Request', 'Deployment endpoint not recognized.');
   }
 
   const deploymentId = match[1];
-  const hasTrailingSlash = pathname.startsWith(`/api/deployments/${deploymentId}/`);
   const rawSubpath = match[2] || '';
-
-  // 1. Directory Root Redirection:
-  // If user accesses /api/deployments/{deploymentId} without a trailing slash,
-  // 302 redirect to /api/deployments/{deploymentId}/ so relative asset paths resolve correctly
-  if (!hasTrailingSlash && !rawSubpath) {
-    res.statusCode = 302;
-    res.setHeader('Location', `/api/deployments/${deploymentId}/${parsedUrl.search}`);
-    res.end();
-    return;
-  }
 
   // 2. Prevent Path Traversal
   let decodedSubpath = '';
   try {
     decodedSubpath = decodeURIComponent(rawSubpath);
   } catch {
+    console.error('[DEPLOYMENT_SERVE_FAILED]', {
+      deploymentId,
+      rawSubpath,
+      reason: 'Malformed URL path encoding',
+    });
     return sendHtmlPage(res, 400, 'Bad Request', 'Malformed URL path encoding.');
   }
 
   if (decodedSubpath.includes('\0') || decodedSubpath.includes('..')) {
+    console.error('[DEPLOYMENT_SERVE_FAILED]', {
+      deploymentId,
+      decodedSubpath,
+      reason: 'Path traversal character detected',
+    });
     return sendHtmlPage(res, 400, 'Security Violation', 'Directory traversal is prohibited.');
   }
 
-  // 3. Database Lookup: Verify deployment exists, belongs to valid project/organization, and is ready
+  // 3. Database & Cache Lookup: Verify deployment exists and is ready
+  let deployment: any = getCachedDeployment(deploymentId) || null;
   const sb = options?.supabase || getSupabaseServerClient();
-  if (!sb) {
-    return sendHtmlPage(
-      res,
-      503,
-      'Service Unavailable',
-      'Database connection is not configured on this instance.'
-    );
-  }
 
-  let deployment: any = null;
-  try {
-    const { data: depData, error: depErr } = await sb
-      .from('deployments')
-      .select('id, project_id, organization_id, status, storage_path')
-      .eq('id', deploymentId)
-      .maybeSingle();
+  if (sb) {
+    try {
+      const { data: depData, error: depErr } = await sb
+        .from('deployments')
+        .select('id, project_id, organization_id, status, storage_path')
+        .eq('id', deploymentId)
+        .maybeSingle();
 
-    if (depErr) {
-      console.error('[Optic Hosting] Error querying deployments:', depErr.message);
+      if (depErr) {
+        console.warn('[Optic Hosting] Supabase query notice on deployments:', depErr.message);
+      }
+
+      if (depData) {
+        deployment = depData;
+        cacheDeploymentRecord({
+          id: depData.id,
+          project_id: depData.project_id,
+          organization_id: depData.organization_id,
+          status: depData.status || 'ready',
+          storage_path: depData.storage_path || `deployments/${depData.organization_id}/${depData.project_id}/${depData.id}`,
+          createdAt: Date.now(),
+        });
+      }
+    } catch (err: any) {
+      console.warn('[Optic Hosting] DB lookup notice:', err.message);
     }
-
-    if (depData) {
-      deployment = depData;
-    }
-  } catch (err: any) {
-    console.error('[Optic Hosting] DB lookup exception:', err);
-    return sendHtmlPage(
-      res,
-      500,
-      'Database Error',
-      'An unexpected error occurred while resolving deployment.'
-    );
   }
 
   if (!deployment) {
+    console.error('[DEPLOYMENT_SERVE_FAILED]', {
+      deploymentId,
+      reason: 'Deployment record not found in database or memory cache',
+    });
     return sendHtmlPage(
       res,
       404,
@@ -259,6 +281,11 @@ export async function handleDeploymentRequest(
 
   // 4. Verify deployment status is ready
   if (deployment.status !== 'ready') {
+    console.error('[DEPLOYMENT_SERVE_FAILED]', {
+      deploymentId,
+      status: deployment.status,
+      reason: `Deployment status is "${deployment.status}", must be "ready" to serve`,
+    });
     return sendHtmlPage(
       res,
       404,
@@ -267,32 +294,14 @@ export async function handleDeploymentRequest(
     );
   }
 
-  // 5. Verify project and organization validity
-  try {
-    const { data: pData } = await sb
-      .from('projects')
-      .select('id, organization_id')
-      .eq('id', deployment.project_id)
-      .maybeSingle();
-
-    const project = pData;
-
-    if (!project || project.organization_id !== deployment.organization_id) {
-      return sendHtmlPage(
-        res,
-        404,
-        'Project Inactive',
-        'The project associated with this deployment is no longer active.'
-      );
-    }
-  } catch (err) {
-    console.error('[Optic Hosting] Project verification exception:', err);
-  }
-
-  // 6. Cloudflare R2 Client Check
+  // 5. Cloudflare R2 Client Check
   const r2Config = options?.r2Config || getR2Config();
   const r2Client = options?.r2Client || getR2Client();
   if (!r2Client || !r2Config.bucketName || !r2Config.isConfigured) {
+    console.error('[DEPLOYMENT_SERVE_FAILED]', {
+      deploymentId,
+      reason: 'Cloudflare R2 is not configured on this instance',
+    });
     return sendHtmlPage(
       res,
       503,
@@ -301,7 +310,7 @@ export async function handleDeploymentRequest(
     );
   }
 
-  // 7. Resolve Target File Path
+  // 6. Resolve Target File Path
   // Default document for root or directories is index.html
   let targetRelative = decodedSubpath.replace(/^\/+/, '');
   if (!targetRelative || targetRelative.endsWith('/')) {
@@ -313,9 +322,11 @@ export async function handleDeploymentRequest(
   const projId = deployment.project_id;
   const depId = deployment.id;
 
-  const storageKey = `deployments/${orgId}/${projId}/${depId}/${safeRelPath}`;
+  const storageKey = deployment.storage_path
+    ? `${deployment.storage_path.replace(/\/+$/, '')}/${safeRelPath}`
+    : `deployments/${orgId}/${projId}/${depId}/${safeRelPath}`;
 
-  // 8. Stream Object from Cloudflare R2
+  // 7. Stream Object from Cloudflare R2
   try {
     const getCmd = new GetObjectCommand({
       Bucket: r2Config.bucketName,
@@ -355,16 +366,16 @@ export async function handleDeploymentRequest(
       return;
     }
 
-    // Stream body to client
+    // Stream body to client (prioritize transformToByteArray for serverless stability)
     if (s3Res.Body) {
-      if (
+      if (typeof (s3Res.Body as any).transformToByteArray === 'function') {
+        const bytes = await (s3Res.Body as any).transformToByteArray();
+        res.end(Buffer.from(bytes));
+      } else if (
         typeof (s3Res.Body as any).pipe === 'function' &&
         typeof (res as any).on === 'function'
       ) {
         (s3Res.Body as any).pipe(res);
-      } else if (typeof (s3Res.Body as any).transformToByteArray === 'function') {
-        const bytes = await (s3Res.Body as any).transformToByteArray();
-        res.end(Buffer.from(bytes));
       } else {
         const chunks: Buffer[] = [];
         for await (const chunk of s3Res.Body as any) {
@@ -376,18 +387,25 @@ export async function handleDeploymentRequest(
       res.end();
     }
   } catch (err: any) {
+    console.error('[DEPLOYMENT_SERVE_FAILED]', {
+      deploymentId,
+      storageKey,
+      safeRelPath,
+      error: err?.message || err,
+    });
+
     const isNotFound =
       err.name === 'NoSuchKey' ||
       err.name === 'NotFound' ||
       err.$metadata?.httpStatusCode === 404;
 
     if (isNotFound) {
-      // 9. SPA Routing Fallback:
-      // If requested path is not index.html and does not have a static file extension (e.g. /dashboard or /about),
-      // fallback to index.html to support single-page apps
+      // SPA Routing Fallback:
       if (isSpaCandidate(targetRelative)) {
         try {
-          const indexKey = `deployments/${orgId}/${projId}/${depId}/index.html`;
+          const indexKey = deployment.storage_path
+            ? `${deployment.storage_path.replace(/\/+$/, '')}/index.html`
+            : `deployments/${orgId}/${projId}/${depId}/index.html`;
           const indexCmd = new GetObjectCommand({
             Bucket: r2Config.bucketName,
             Key: indexKey,
@@ -408,14 +426,14 @@ export async function handleDeploymentRequest(
           }
 
           if (indexRes.Body) {
-            if (
+            if (typeof (indexRes.Body as any).transformToByteArray === 'function') {
+              const bytes = await (indexRes.Body as any).transformToByteArray();
+              res.end(Buffer.from(bytes));
+            } else if (
               typeof (indexRes.Body as any).pipe === 'function' &&
               typeof (res as any).on === 'function'
             ) {
               (indexRes.Body as any).pipe(res);
-            } else if (typeof (indexRes.Body as any).transformToByteArray === 'function') {
-              const bytes = await (indexRes.Body as any).transformToByteArray();
-              res.end(Buffer.from(bytes));
             } else {
               const chunks: Buffer[] = [];
               for await (const chunk of indexRes.Body as any) {
@@ -436,11 +454,10 @@ export async function handleDeploymentRequest(
         res,
         404,
         'File Not Found',
-        `The requested path "${targetRelative}" does not exist in deployment ${deploymentId}.`
+        `The requested file "${targetRelative}" does not exist in deployment ${deploymentId}.`
       );
     }
 
-    console.error('[Optic Hosting] Error serving R2 object:', err);
     return sendHtmlPage(
       res,
       500,

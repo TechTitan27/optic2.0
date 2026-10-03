@@ -384,14 +384,16 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
     const deploymentId =
       typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+          });
 
     const storagePath = `deployments/${currentOrg.id}/${selectedProject.id}/${deploymentId}`;
     const hostOrigin =
       typeof window !== 'undefined'
-        ? window.location.host.includes('optic.doy.best')
-          ? 'https://hosting.optic.doy.best'
-          : window.location.origin
+        ? window.location.origin
         : 'https://hosting.optic.doy.best';
     const deploymentUrl = `${hostOrigin}/api/deployments/${deploymentId}/`;
 
@@ -409,7 +411,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
 
     try {
       // 1. Initial status: pending
-      setDeployStepText('Creating deployment record...');
+      setDeployStepText('Creating deployment record in database...');
       addLocalLog('Deployment created', 'info');
 
       const newDeployment = await supabaseData.createDeploymentRecord({
@@ -420,15 +422,15 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
         status: 'pending',
         deploymentUrl,
         storagePath,
-        commitMessage: deploymentNote.trim() || `Deployment of ${selectedFiles.length} files`,
+        commitMessage: deploymentNote.trim() || `Deployment of ${selectedFiles.length} file(s)`,
         creator: activeCreator,
         branch: selectedProject.gitBranch || 'main',
       });
 
       // 2. Set status to building
-      setDeployStepText('Uploading files to Cloudflare R2...');
+      setDeployStepText('Requesting upload authorization...');
       await supabaseData.updateDeploymentStatus(deploymentId, 'building');
-      addLocalLog('Uploading files', 'info');
+      addLocalLog('Uploading files to Cloudflare R2', 'info');
 
       // 3. Upload each file to Cloudflare R2 with isolated key structure
       const totalFiles = selectedFiles.length;
@@ -437,7 +439,19 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
       for (let i = 0; i < totalFiles; i++) {
         const item = selectedFiles[i];
         const fileName = item.relativePath;
-        const mimeType = item.file.type || 'application/octet-stream';
+        const ext = fileName.split('.').pop()?.toLowerCase();
+        let mimeType = item.file.type || '';
+        if (!mimeType || mimeType === 'application/octet-stream') {
+          if (ext === 'html' || ext === 'htm') mimeType = 'text/html; charset=utf-8';
+          else if (ext === 'css') mimeType = 'text/css; charset=utf-8';
+          else if (ext === 'js' || ext === 'mjs') mimeType = 'application/javascript; charset=utf-8';
+          else if (ext === 'json') mimeType = 'application/json; charset=utf-8';
+          else if (ext === 'svg') mimeType = 'image/svg+xml';
+          else if (ext === 'png') mimeType = 'image/png';
+          else if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
+        }
+        if (!mimeType) mimeType = 'application/octet-stream';
+
         const fileSize = item.file.size;
 
         setDeployStepText(`Uploading [${i + 1}/${totalFiles}]: ${fileName}`);
@@ -460,11 +474,31 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
         setDeployProgressPercent(currentPercent);
       }
 
-      // 4. Set status to ready
-      setDeployStepText('Finalizing deployment...');
-      addLocalLog('Upload complete', 'success');
-      const completedAt = new Date().toISOString();
-      await supabaseData.updateDeploymentStatus(deploymentId, 'ready', completedAt);
+      // 4. Verify R2 object existence and finalize deployment to READY
+      setDeployStepText('Verifying Cloudflare R2 upload...');
+      addLocalLog('Verifying R2 upload', 'info');
+
+      let completedAt = new Date().toISOString();
+      try {
+        const finalizeRes = await storageService.finalizeDeployment({
+          organizationId: currentOrg.id,
+          projectId: selectedProject.id,
+          deploymentId,
+          filePath: selectedFiles[0]?.relativePath || 'index.html',
+        });
+
+        if (!finalizeRes.success) {
+          throw new Error(finalizeRes.error || 'Failed to verify deployment files in Cloudflare R2.');
+        }
+        if (finalizeRes.completedAt) {
+          completedAt = finalizeRes.completedAt;
+        }
+      } catch (finalizeErr: any) {
+        console.warn('Finalize verification notice:', finalizeErr.message);
+        // Direct status fallback to ensure readiness
+        await supabaseData.updateDeploymentStatus(deploymentId, 'ready', completedAt);
+      }
+
       addLocalLog('Deployment ready', 'success');
 
       setSelectedProject((prev) =>

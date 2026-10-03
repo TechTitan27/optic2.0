@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   PutBucketCorsCommand,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'crypto';
@@ -71,14 +72,7 @@ export async function ensureR2Cors(): Promise<boolean> {
           {
             AllowedHeaders: ['*'],
             AllowedMethods: ['PUT', 'GET', 'HEAD', 'DELETE'],
-            AllowedOrigins: [
-              'https://cloud.optic.doy.best',
-              'https://optic.doy.best',
-              'http://localhost:3000',
-              'http://localhost:5173',
-              'https://ais-dev-7xqwvdpwsxzc333qufjyyn-51319299209.europe-west2.run.app',
-              'https://ais-pre-7xqwvdpwsxzc333qufjyyn-51319299209.europe-west2.run.app',
-            ],
+            AllowedOrigins: ['*'],
             ExposeHeaders: ['ETag'],
             MaxAgeSeconds: 3600,
           },
@@ -534,6 +528,15 @@ export async function createDeploymentPresignedUploadUrl(params: {
 
   const uploadUrl = await getSignedUrl(client, command, { expiresIn });
 
+  console.log('[R2_UPLOAD_STARTED]', {
+    deploymentId,
+    projectId,
+    organizationId,
+    filePath: safeRelPath,
+    storageKey,
+    size,
+  });
+
   ensureR2Cors().catch(() => {});
 
   return {
@@ -541,4 +544,56 @@ export async function createDeploymentPresignedUploadUrl(params: {
     storageKey,
     expiresIn,
   };
+}
+
+/**
+ * Verify that a deployment file actually exists in Cloudflare R2 bucket
+ */
+export async function verifyR2DeploymentFile(params: {
+  organizationId: string;
+  projectId: string;
+  deploymentId: string;
+  filePath?: string;
+}): Promise<{ exists: boolean; size?: number; storageKey: string; error?: string }> {
+  const { organizationId, projectId, deploymentId, filePath = 'index.html' } = params;
+  const config = getR2Config();
+
+  if (!config.isConfigured) {
+    return {
+      exists: false,
+      storageKey: '',
+      error: 'Cloudflare R2 is not configured on this server.',
+    };
+  }
+
+  const client = getR2Client();
+  if (!client || !config.bucketName) {
+    return {
+      exists: false,
+      storageKey: '',
+      error: 'Cloudflare R2 client initialization failed.',
+    };
+  }
+
+  const safeRelPath = sanitizeDeploymentPath(filePath);
+  const storageKey = `deployments/${organizationId}/${projectId}/${deploymentId}/${safeRelPath}`;
+
+  try {
+    const headCmd = new HeadObjectCommand({
+      Bucket: config.bucketName,
+      Key: storageKey,
+    });
+    const headRes = await client.send(headCmd);
+    return {
+      exists: true,
+      size: headRes.ContentLength || 0,
+      storageKey,
+    };
+  } catch (err: any) {
+    return {
+      exists: false,
+      storageKey,
+      error: err?.message || 'Object not found in Cloudflare R2 bucket.',
+    };
+  }
 }
