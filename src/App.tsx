@@ -30,6 +30,16 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 function MainApp() {
   const { user } = useAuth();
 
+  // Public deployment route guard: /api/deployments/* must NEVER render the Optic React SPA
+  if (
+    typeof window !== 'undefined' &&
+    (window.location.pathname.startsWith('/api/deployments') ||
+      window.location.pathname.includes('/api/deployments/'))
+  ) {
+    window.location.reload();
+    return null;
+  }
+
   // 1. Initial surface detection with hostname as primary source of truth
   const initial = resolveSurfaceState();
   const domainInfo = getDomainInfo();

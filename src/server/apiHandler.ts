@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import crypto from 'crypto';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import {
   getSupabaseServerClient,
   verifyUserToken,
@@ -8,6 +9,7 @@ import {
 } from './supabaseServer.js';
 import {
   getR2Config,
+  getR2Client,
   createPresignedUploadUrl,
   createPresignedDownloadUrl,
   deleteStorageFile,
@@ -123,7 +125,7 @@ export async function handleApiRequest(
   }
 
   // 0. GET/HEAD /api/deployments/:deploymentId/* (REAL PUBLIC STATIC FILE SERVER)
-  if (url.startsWith('/api/deployments')) {
+  if (url.startsWith('/api/deployments') || pathname.startsWith('/api/deployments')) {
     return handleDeploymentRequest(req, res);
   }
 
@@ -676,6 +678,32 @@ export async function handleApiRequest(
         storage_path: `deployments/${organizationId}/${projectId}/${deploymentId}`,
         createdAt: Date.now(),
       });
+
+      // Persist deployment metadata to R2 for edge resilience across all serverless instances
+      try {
+        const r2Client = getR2Client();
+        const r2Config = getR2Config();
+        if (r2Client && r2Config.bucketName) {
+          const metaPayload = JSON.stringify({
+            id: deploymentId,
+            project_id: projectId,
+            organization_id: organizationId,
+            status: 'ready',
+            storage_path: `deployments/${organizationId}/${projectId}/${deploymentId}`,
+            completed_at: completedAt,
+          });
+          await r2Client.send(
+            new PutObjectCommand({
+              Bucket: r2Config.bucketName,
+              Key: `deployments/_meta/${deploymentId}.json`,
+              Body: Buffer.from(metaPayload, 'utf-8'),
+              ContentType: 'application/json',
+            })
+          );
+        }
+      } catch (metaErr: any) {
+        console.warn('[Optic Hosting] Notice saving deployment metadata in R2:', metaErr?.message || metaErr);
+      }
 
       console.log('[DEPLOYMENT_READY]', {
         deploymentId,

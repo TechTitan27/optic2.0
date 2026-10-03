@@ -18,6 +18,26 @@
       "destination": "/api/waitlist"
     },
     {
+      "source": "/api/deployments",
+      "destination": "/api/deployments"
+    },
+    {
+      "source": "/api/deployments/",
+      "destination": "/api/deployments"
+    },
+    {
+      "source": "/api/deployments/:deploymentId",
+      "destination": "/api/deployments?deploymentId=:deploymentId"
+    },
+    {
+      "source": "/api/deployments/:deploymentId/",
+      "destination": "/api/deployments?deploymentId=:deploymentId"
+    },
+    {
+      "source": "/api/deployments/:deploymentId/:subpath*",
+      "destination": "/api/deployments?deploymentId=:deploymentId&subpath=:subpath*"
+    },
+    {
       "source": "/api/deployments/:path*",
       "destination": "/api/deployments?path=:path*"
     },
@@ -50,7 +70,7 @@
       "destination": "/api/domains"
     },
     {
-      "source": "/(.*)",
+      "source": "/:path*",
       "destination": "/index.html"
     }
   ],
@@ -61,14 +81,6 @@
         {
           "key": "X-Content-Type-Options",
           "value": "nosniff"
-        },
-        {
-          "key": "X-Frame-Options",
-          "value": "DENY"
-        },
-        {
-          "key": "X-XSS-Protection",
-          "value": "1; mode=block"
         }
       ]
     },

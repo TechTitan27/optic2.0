@@ -37,7 +37,7 @@ const MIME_TYPES: Record<string, string> = {
   zip: 'application/zip',
 };
 
-function getMimeType(filePath: string, fallback?: string): string {
+export function getMimeType(filePath: string, fallback?: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase();
   if (ext && MIME_TYPES[ext]) {
     return MIME_TYPES[ext];
@@ -57,7 +57,7 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function sendHtmlPage(res: ServerResponse, statusCode: number, title: string, message: string) {
+export function sendHtmlPage(res: ServerResponse, statusCode: number, title: string, message: string) {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -137,7 +137,6 @@ function sendHtmlPage(res: ServerResponse, statusCode: number, title: string, me
 function isSpaCandidate(subpath: string): boolean {
   if (!subpath || subpath === 'index.html') return false;
   const lastSegment = subpath.split('/').pop() || '';
-  // If the last segment contains a file extension (e.g. .css, .js, .png), it is NOT an SPA candidate
   if (lastSegment.includes('.')) {
     return false;
   }
@@ -170,6 +169,81 @@ export function getCachedDeployment(deploymentId: string): CachedDeployment | un
 }
 
 /**
+ * Extracts deploymentId and relative subpath from any URL or rewrite format.
+ */
+export function extractDeploymentInfo(req: IncomingMessage): {
+  deploymentId: string;
+  rawSubpath: string;
+  rawUrl: string;
+} {
+  const headerUri =
+    (req.headers['x-forwarded-uri'] as string) ||
+    (req.headers['x-original-url'] as string) ||
+    (req.headers['x-matched-path'] as string) ||
+    (req.headers['x-vercel-matched-path'] as string) ||
+    '';
+  const reqUrl = req.url || '';
+
+  // Determine candidate string for path parsing
+  let candidate = '';
+  if (headerUri && headerUri.includes('/api/deployments')) {
+    candidate = headerUri;
+  } else {
+    candidate = reqUrl;
+  }
+
+  let deploymentId = '';
+  let rawSubpath = '';
+
+  try {
+    const parsed = new URL(candidate, 'http://localhost');
+    const pathname = parsed.pathname;
+
+    // Pattern: /api/deployments/:deploymentId or /api/deployments/:deploymentId/*
+    const match = pathname.match(/^\/api\/deployments(?:\/([^/]+))?(?:\/(.*))?$/);
+    if (match && match[1]) {
+      deploymentId = match[1];
+      rawSubpath = match[2] || '';
+    }
+
+    // Check query params if not found via pathname
+    if (!deploymentId) {
+      const depIdParam = parsed.searchParams.get('deploymentId');
+      if (depIdParam) {
+        deploymentId = depIdParam;
+      }
+      const subpathParam = parsed.searchParams.get('subpath');
+      if (subpathParam) {
+        rawSubpath = subpathParam;
+      }
+      const pathParam = parsed.searchParams.get('path');
+      if (pathParam && !deploymentId) {
+        const parts = pathParam.replace(/^\/+/, '').split('/');
+        deploymentId = parts[0] || '';
+        rawSubpath = parts.slice(1).join('/');
+      }
+    } else if (!rawSubpath) {
+      const subpathParam = parsed.searchParams.get('subpath');
+      if (subpathParam) {
+        rawSubpath = subpathParam;
+      }
+    }
+  } catch {
+    const match = candidate.match(/\/api\/deployments\/([^/?#]+)(?:\/([^?#]*))?/);
+    if (match) {
+      deploymentId = match[1] || '';
+      rawSubpath = match[2] || '';
+    }
+  }
+
+  return {
+    deploymentId,
+    rawSubpath,
+    rawUrl: candidate || reqUrl,
+  };
+}
+
+/**
  * Handles incoming public static file requests for ready deployments.
  * Route pattern: /api/deployments/:deploymentId/*
  */
@@ -187,21 +261,22 @@ export async function handleDeploymentRequest(
     return;
   }
 
-  const rawUrl = req.url || '';
+  const { deploymentId, rawSubpath, rawUrl } = extractDeploymentInfo(req);
+
+  // Security Check: Traversal in raw URL
   if (
     rawUrl.includes('/../') ||
     rawUrl.endsWith('/..') ||
     rawUrl.toLowerCase().includes('%2e%2e')
   ) {
+    console.error('[DEPLOYMENT_SERVE_FAILED]', {
+      url: rawUrl,
+      reason: 'Directory traversal sequence in raw URL',
+    });
     return sendHtmlPage(res, 400, 'Security Violation', 'Directory traversal is prohibited.');
   }
 
-  const parsedUrl = new URL(rawUrl, 'http://localhost');
-  const pathname = parsedUrl.pathname;
-
-  // Match /api/deployments/:deploymentId or /api/deployments/:deploymentId/*
-  const match = pathname.match(/^\/api\/deployments\/([^/]+)(?:\/(.*))?$/);
-  if (!match) {
+  if (!deploymentId) {
     console.error('[DEPLOYMENT_SERVE_FAILED]', {
       url: rawUrl,
       reason: 'URL pattern does not match /api/deployments/:deploymentId/*',
@@ -209,10 +284,7 @@ export async function handleDeploymentRequest(
     return sendHtmlPage(res, 404, 'Invalid Request', 'Deployment endpoint not recognized.');
   }
 
-  const deploymentId = match[1];
-  const rawSubpath = match[2] || '';
-
-  // 2. Prevent Path Traversal
+  // Prevent Path Traversal in subpath
   let decodedSubpath = '';
   try {
     decodedSubpath = decodeURIComponent(rawSubpath);
@@ -229,16 +301,26 @@ export async function handleDeploymentRequest(
     console.error('[DEPLOYMENT_SERVE_FAILED]', {
       deploymentId,
       decodedSubpath,
-      reason: 'Path traversal character detected',
+      reason: 'Path traversal character detected in subpath',
     });
     return sendHtmlPage(res, 400, 'Security Violation', 'Directory traversal is prohibited.');
   }
 
-  // 3. Database & Cache Lookup: Verify deployment exists and is ready
+  // 1. STRUCTURED LOG: DEPLOYMENT_REQUEST
+  console.log('[DEPLOYMENT_REQUEST]', {
+    method,
+    url: rawUrl,
+    deploymentId,
+    subpath: decodedSubpath,
+  });
+
+  // 2. Database & Cache Lookup: Verify deployment exists and is ready
   let deployment: any = getCachedDeployment(deploymentId) || null;
   const sb = options?.supabase || getSupabaseServerClient();
+  const r2Config = options?.r2Config || getR2Config();
+  const r2Client = options?.r2Client || getR2Client();
 
-  if (sb) {
+  if (!deployment && sb) {
     try {
       const { data: depData, error: depErr } = await sb
         .from('deployments')
@@ -257,7 +339,9 @@ export async function handleDeploymentRequest(
           project_id: depData.project_id,
           organization_id: depData.organization_id,
           status: depData.status || 'ready',
-          storage_path: depData.storage_path || `deployments/${depData.organization_id}/${depData.project_id}/${depData.id}`,
+          storage_path:
+            depData.storage_path ||
+            `deployments/${depData.organization_id}/${depData.project_id}/${depData.id}`,
           createdAt: Date.now(),
         });
       }
@@ -266,10 +350,57 @@ export async function handleDeploymentRequest(
     }
   }
 
+  // Fallback: Check R2 metadata if database query returned null
+  if (!deployment && r2Client && r2Config.bucketName) {
+    try {
+      const metaCmd = new GetObjectCommand({
+        Bucket: r2Config.bucketName,
+        Key: `deployments/_meta/${deploymentId}.json`,
+      });
+      const metaRes = await r2Client.send(metaCmd);
+      if (metaRes.Body) {
+        let text = '';
+        if (typeof (metaRes.Body as any).transformToString === 'function') {
+          text = await (metaRes.Body as any).transformToString('utf-8');
+        } else if (typeof (metaRes.Body as any).transformToByteArray === 'function') {
+          const bytes = await (metaRes.Body as any).transformToByteArray();
+          text = Buffer.from(bytes).toString('utf-8');
+        }
+        if (text) {
+          const parsed = JSON.parse(text);
+          if (parsed && parsed.id) {
+            deployment = parsed;
+            cacheDeploymentRecord({
+              id: parsed.id,
+              project_id: parsed.project_id,
+              organization_id: parsed.organization_id,
+              status: parsed.status || 'ready',
+              storage_path:
+                parsed.storage_path ||
+                `deployments/${parsed.organization_id}/${parsed.project_id}/${parsed.id}`,
+              createdAt: Date.now(),
+            });
+          }
+        }
+      }
+    } catch {
+      // Metadata object not present
+    }
+  }
+
+  // 2. STRUCTURED LOG: DEPLOYMENT_LOOKUP
+  console.log('[DEPLOYMENT_LOOKUP]', {
+    deploymentId,
+    found: Boolean(deployment),
+    status: deployment?.status || null,
+    projectId: deployment?.project_id || null,
+    organizationId: deployment?.organization_id || null,
+  });
+
   if (!deployment) {
     console.error('[DEPLOYMENT_SERVE_FAILED]', {
       deploymentId,
-      reason: 'Deployment record not found in database or memory cache',
+      reason: 'Deployment record not found in database, memory cache, or storage',
     });
     return sendHtmlPage(
       res,
@@ -279,7 +410,7 @@ export async function handleDeploymentRequest(
     );
   }
 
-  // 4. Verify deployment status is ready
+  // 3. Verify deployment status is ready
   if (deployment.status !== 'ready') {
     console.error('[DEPLOYMENT_SERVE_FAILED]', {
       deploymentId,
@@ -294,9 +425,7 @@ export async function handleDeploymentRequest(
     );
   }
 
-  // 5. Cloudflare R2 Client Check
-  const r2Config = options?.r2Config || getR2Config();
-  const r2Client = options?.r2Client || getR2Client();
+  // 4. Cloudflare R2 Client Check
   if (!r2Client || !r2Config.bucketName || !r2Config.isConfigured) {
     console.error('[DEPLOYMENT_SERVE_FAILED]', {
       deploymentId,
@@ -310,8 +439,7 @@ export async function handleDeploymentRequest(
     );
   }
 
-  // 6. Resolve Target File Path
-  // Default document for root or directories is index.html
+  // 5. Resolve Target File Path
   let targetRelative = decodedSubpath.replace(/^\/+/, '');
   if (!targetRelative || targetRelative.endsWith('/')) {
     targetRelative = `${targetRelative}index.html`;
@@ -326,7 +454,15 @@ export async function handleDeploymentRequest(
     ? `${deployment.storage_path.replace(/\/+$/, '')}/${safeRelPath}`
     : `deployments/${orgId}/${projId}/${depId}/${safeRelPath}`;
 
-  // 7. Stream Object from Cloudflare R2
+  // 3. STRUCTURED LOG: DEPLOYMENT_R2_PATH
+  console.log('[DEPLOYMENT_R2_PATH]', {
+    deploymentId,
+    targetRelative,
+    safeRelPath,
+    storageKey,
+  });
+
+  // 6. Stream Object from Cloudflare R2
   try {
     const getCmd = new GetObjectCommand({
       Bucket: r2Config.bucketName,
@@ -347,6 +483,15 @@ export async function handleDeploymentRequest(
     }
 
     const mime = getMimeType(safeRelPath, s3Res.ContentType);
+
+    // 4. STRUCTURED LOG: DEPLOYMENT_R2_READ
+    console.log('[DEPLOYMENT_R2_READ]', {
+      deploymentId,
+      storageKey,
+      contentLength: s3Res.ContentLength || null,
+      contentType: mime,
+    });
+
     res.statusCode = 200;
     res.setHeader('Content-Type', mime);
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -361,12 +506,21 @@ export async function handleDeploymentRequest(
       res.setHeader('Content-Length', s3Res.ContentLength);
     }
 
+    // 5. STRUCTURED LOG: DEPLOYMENT_RESPONSE
+    console.log('[DEPLOYMENT_RESPONSE]', {
+      deploymentId,
+      statusCode: 200,
+      contentType: mime,
+      contentLength: s3Res.ContentLength || 0,
+      safeRelPath,
+    });
+
     if (method === 'HEAD') {
       res.end();
       return;
     }
 
-    // Stream body to client (prioritize transformToByteArray for serverless stability)
+    // Stream body to client
     if (s3Res.Body) {
       if (typeof (s3Res.Body as any).transformToByteArray === 'function') {
         const bytes = await (s3Res.Body as any).transformToByteArray();
@@ -387,6 +541,7 @@ export async function handleDeploymentRequest(
       res.end();
     }
   } catch (err: any) {
+    // 6. STRUCTURED LOG: DEPLOYMENT_SERVE_FAILED
     console.error('[DEPLOYMENT_SERVE_FAILED]', {
       deploymentId,
       storageKey,
@@ -400,7 +555,7 @@ export async function handleDeploymentRequest(
       err.$metadata?.httpStatusCode === 404;
 
     if (isNotFound) {
-      // SPA Routing Fallback:
+      // SPA Fallback for extensionless client-side routes
       if (isSpaCandidate(targetRelative)) {
         try {
           const indexKey = deployment.storage_path
@@ -419,6 +574,14 @@ export async function handleDeploymentRequest(
 
           if (indexRes.ETag) res.setHeader('ETag', indexRes.ETag);
           if (indexRes.ContentLength) res.setHeader('Content-Length', indexRes.ContentLength);
+
+          console.log('[DEPLOYMENT_RESPONSE]', {
+            deploymentId,
+            statusCode: 200,
+            contentType: 'text/html; charset=utf-8',
+            contentLength: indexRes.ContentLength || 0,
+            safeRelPath: 'index.html (SPA Fallback)',
+          });
 
           if (method === 'HEAD') {
             res.end();
