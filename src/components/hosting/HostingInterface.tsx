@@ -558,9 +558,12 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
     );
   }
 
-  // Canonical Production and Immutable URLs
+  // Canonical Production, Immutable URLs, and Working Direct Live Endpoint
   const currentProdUrl = selectedProject
     ? `https://${selectedProject.slug}.host.optic.doy.best`
+    : '';
+  const directEndpointUrl = selectedProject
+    ? `${hostOrigin}/api/deployments/${selectedProject.slug}/`
     : '';
 
   return (
@@ -641,46 +644,79 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                 </span>
               </div>
 
-              {/* Production Domain */}
-              <div className="flex items-center gap-2 pt-0.5">
-                <a
-                  href={currentProdUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-xs font-mono text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition-colors"
-                >
-                  <span>{currentProdUrl}</span>
-                  <ArrowUpRight size={13} />
-                </a>
-                <button
-                  onClick={() => handleCopy(currentProdUrl, 'prod-url')}
-                  className="text-zinc-500 hover:text-zinc-300 p-0.5 transition-colors"
-                  title="Copy production domain"
-                >
-                  {copiedUrl === 'prod-url' ? (
-                    <Check size={12} className="text-emerald-400" />
-                  ) : (
-                    <Copy size={12} />
-                  )}
-                </button>
+              {/* Production Live Endpoint & Custom Domain */}
+              <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+                {/* Working Direct Live Endpoint */}
+                <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded-lg">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-semibold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    Endpoint:
+                  </span>
+                  <a
+                    href={directEndpointUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-zinc-200 hover:text-white flex items-center gap-1 transition-colors underline decoration-zinc-700"
+                    title="Direct live endpoint (always online)"
+                  >
+                    <span>{directEndpointUrl.replace(/^https?:\/\/[^/]+/, '')}</span>
+                    <ArrowUpRight size={11} className="text-zinc-400" />
+                  </a>
+                  <button
+                    onClick={() => handleCopy(directEndpointUrl, 'direct-endpoint')}
+                    className="text-zinc-500 hover:text-zinc-300 p-0.5 transition-colors"
+                    title="Copy direct live endpoint"
+                  >
+                    {copiedUrl === 'direct-endpoint' ? (
+                      <Check size={11} className="text-emerald-400" />
+                    ) : (
+                      <Copy size={11} />
+                    )}
+                  </button>
+                </div>
+
+                {/* Subdomain Wildcard Domain */}
+                <div className="flex items-center gap-1.5 text-zinc-400">
+                  <span className="text-[11px] font-mono text-zinc-500">Domain:</span>
+                  <a
+                    href={currentProdUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-indigo-400/90 hover:text-indigo-300 flex items-center gap-1 transition-colors"
+                    title="Requires wildcard DNS (*.host.optic.doy.best)"
+                  >
+                    <span>{currentProdUrl.replace('https://', '')}</span>
+                    <ArrowUpRight size={11} />
+                  </a>
+                  <button
+                    onClick={() => handleCopy(currentProdUrl, 'prod-url')}
+                    className="text-zinc-500 hover:text-zinc-300 p-0.5 transition-colors"
+                    title="Copy wildcard domain"
+                  >
+                    {copiedUrl === 'prod-url' ? (
+                      <Check size={11} className="text-emerald-400" />
+                    ) : (
+                      <Copy size={11} />
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
-                variant="outline"
+                variant="primary"
                 onClick={() => {
-                  const targetUrl = activeProductionDeployment?.deploymentUrl || currentProdUrl;
-                  window.open(targetUrl, '_blank');
+                  window.open(directEndpointUrl, '_blank');
                 }}
                 icon={<ExternalLink size={13} />}
               >
-                Visit
+                Visit Live Site
               </Button>
               <Button
                 size="sm"
-                variant="primary"
+                variant="outline"
                 onClick={() => {
                   setSelectedFiles([]);
                   setDeployError(null);
@@ -949,9 +985,40 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
           {activeTab === 'overview' && (
             <div className="space-y-6">
               {/* Architecture & URLs */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <Card className="p-4 border-zinc-800 bg-zinc-900/40 space-y-2">
-                  <div className="text-[11px] font-mono text-zinc-500 uppercase">Production URL</div>
+                  <div className="text-[11px] font-mono text-emerald-400 uppercase font-semibold flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    Live Direct Endpoint
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <a
+                      href={directEndpointUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm font-mono text-zinc-200 hover:text-white underline decoration-zinc-700 truncate"
+                    >
+                      {directEndpointUrl.replace(/^https?:\/\//, '')}
+                    </a>
+                    <button
+                      onClick={() => handleCopy(directEndpointUrl, 'overview-endpoint')}
+                      className="text-zinc-500 hover:text-zinc-300 p-1"
+                      title="Copy endpoint"
+                    >
+                      {copiedUrl === 'overview-endpoint' ? (
+                        <Check size={13} className="text-emerald-400" />
+                      ) : (
+                        <Copy size={13} />
+                      )}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Always online. Directly streams project files from Cloudflare R2 storage.
+                  </p>
+                </Card>
+
+                <Card className="p-4 border-zinc-800 bg-zinc-900/40 space-y-2">
+                  <div className="text-[11px] font-mono text-zinc-500 uppercase">Wildcard Domain</div>
                   <div className="flex items-center justify-between gap-2">
                     <a
                       href={currentProdUrl}
@@ -959,11 +1026,12 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                       rel="noreferrer"
                       className="text-sm font-mono text-indigo-400 hover:underline truncate"
                     >
-                      {currentProdUrl}
+                      {currentProdUrl.replace('https://', '')}
                     </a>
                     <button
                       onClick={() => handleCopy(currentProdUrl, 'overview-prod')}
                       className="text-zinc-500 hover:text-zinc-300 p-1"
+                      title="Copy domain"
                     >
                       {copiedUrl === 'overview-prod' ? (
                         <Check size={13} className="text-emerald-400" />
@@ -973,7 +1041,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                     </button>
                   </div>
                   <p className="text-[11px] text-zinc-400">
-                    Always routes to the active production deployment without downtime.
+                    Custom edge host. Requires wildcard DNS setup on your domain.
                   </p>
                 </Card>
 
@@ -1211,10 +1279,14 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                         </span>
                       </div>
 
-                      {/* Domain link */}
-                      <div className="text-xs font-mono text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
-                        <span>{prodUrl}</span>
-                        <ArrowUpRight size={12} />
+                      {/* Live endpoint & Domain display */}
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+                        <div className="flex items-center gap-1 text-emerald-400/90 group-hover:text-emerald-300 transition-colors">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          <span className="truncate">{`/api/deployments/${proj.slug}/`}</span>
+                        </div>
+                        <span className="text-zinc-600">·</span>
+                        <span className="text-zinc-500 truncate">{`${proj.slug}.host...`}</span>
                       </div>
                     </div>
 

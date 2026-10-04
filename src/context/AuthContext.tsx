@@ -135,9 +135,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const { data, error } = await sb.auth.getSession();
         if (error) throw error;
-        syncUserFromSession(data.session);
+        if (data?.session) {
+          syncUserFromSession(data.session);
+          return;
+        }
+
+        // If getSession was null or expired, try explicitly refreshing token
+        const { data: refData, error: refErr } = await sb.auth.refreshSession().catch(() => ({ data: null, error: null }));
+        if (!refErr && refData?.session) {
+          syncUserFromSession(refData.session);
+          return;
+        }
+
+        syncUserFromSession(null);
       } catch (err: any) {
-        console.error('Session refresh error:', err);
+        console.warn('[AuthContext] Session refresh notice:', err?.message || err);
       }
     }
   }, [syncUserFromSession]);
@@ -180,13 +192,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 1. Check existing Supabase session on boot
       sb.auth
         .getSession()
-        .then(({ data: { session: initSession }, error }) => {
+        .then(async ({ data: { session: initSession }, error }) => {
           if (!mounted) return;
           if (error) {
             console.warn('Initial session lookup warning:', error.message);
           }
-          syncUserFromSession(initSession);
-          setLoading(false);
+          if (initSession) {
+            syncUserFromSession(initSession);
+            setLoading(false);
+          } else {
+            // Attempt auto-refresh in case access token expired while tab was closed
+            const { data: refData } = await sb.auth.refreshSession().catch(() => ({ data: null }));
+            if (!mounted) return;
+            syncUserFromSession(refData?.session || null);
+            setLoading(false);
+          }
         })
         .catch((err) => {
           if (!mounted) return;
@@ -226,10 +246,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
       window.addEventListener('message', handlePopupMessage);
 
+      // 4. Tab focus and visibility change listener: prevent session expiration when tab is backgrounded
+      const handleVisibilityOrFocus = async () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+          try {
+            const { data: currData } = await sb.auth.getSession();
+            if (currData?.session) {
+              if (mounted) syncUserFromSession(currData.session);
+            } else {
+              const { data: refData } = await sb.auth.refreshSession().catch(() => ({ data: null }));
+              if (mounted && refData?.session) {
+                syncUserFromSession(refData.session);
+              }
+            }
+          } catch (e) {
+            // ignore background refresh errors
+          }
+        }
+      };
+      window.addEventListener('focus', handleVisibilityOrFocus);
+      document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+      // 5. Cross-subdomain & cross-tab sync via storage events and BroadcastChannel
+      const handleStorage = (e: StorageEvent) => {
+        if (e.key === 'optic-auth-session' || e.key === LOCAL_SESSION_KEY) {
+          refreshSession();
+        }
+      };
+      window.addEventListener('storage', handleStorage);
+
+      let channel: BroadcastChannel | null = null;
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          channel = new BroadcastChannel('optic_auth_sync');
+          channel.onmessage = (ev) => {
+            if (ev.data?.type === 'AUTH_UPDATED' && mounted) {
+              refreshSession();
+            }
+          };
+        }
+      } catch {}
+
       return () => {
         mounted = false;
         subscription.unsubscribe();
         window.removeEventListener('message', handlePopupMessage);
+        window.removeEventListener('focus', handleVisibilityOrFocus);
+        document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+        window.removeEventListener('storage', handleStorage);
+        channel?.close();
       };
     } else {
       // Supabase is not configured yet with an Anon Key
@@ -238,7 +303,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         mounted = false;
       };
     }
-  }, [syncUserFromSession]);
+  }, [syncUserFromSession, refreshSession]);
 
   const signIn = async (email: string, password: string) => {
     setLoading(true);

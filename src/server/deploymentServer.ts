@@ -527,6 +527,76 @@ export async function handleDeploymentRequest(
     }
   }
 
+  // 2b. Project Slug Endpoint Resolution: If identifier was not a direct deployment ID, resolve as project slug or project ID
+  if (!deployment) {
+    const prodDepId = await resolveProductionDeploymentId(deploymentId, options);
+    if (prodDepId && prodDepId !== deploymentId) {
+      deployment = getCachedDeployment(prodDepId) || null;
+      if (!deployment && sb) {
+        try {
+          const { data: depData } = await sb
+            .from('deployments')
+            .select('id, project_id, organization_id, status, storage_path')
+            .eq('id', prodDepId)
+            .maybeSingle();
+
+          if (depData) {
+            deployment = depData;
+            cacheDeploymentRecord({
+              id: depData.id,
+              project_id: depData.project_id,
+              organization_id: depData.organization_id,
+              status: depData.status || 'ready',
+              storage_path:
+                depData.storage_path ||
+                `deployments/${depData.organization_id}/${depData.project_id}/${depData.id}`,
+              createdAt: Date.now(),
+            });
+          }
+        } catch (err: any) {
+          console.warn('[Optic Hosting] Project endpoint DB lookup notice:', err.message);
+        }
+      }
+
+      if (!deployment && r2Client && r2Config.bucketName) {
+        try {
+          const metaCmd = new GetObjectCommand({
+            Bucket: r2Config.bucketName,
+            Key: `deployments/_meta/${prodDepId}.json`,
+          });
+          const metaRes = await r2Client.send(metaCmd);
+          if (metaRes.Body) {
+            let text = '';
+            if (typeof (metaRes.Body as any).transformToString === 'function') {
+              text = await (metaRes.Body as any).transformToString('utf-8');
+            } else if (typeof (metaRes.Body as any).transformToByteArray === 'function') {
+              const bytes = await (metaRes.Body as any).transformToByteArray();
+              text = Buffer.from(bytes).toString('utf-8');
+            }
+            if (text) {
+              const parsed = JSON.parse(text);
+              if (parsed && parsed.id) {
+                deployment = parsed;
+                cacheDeploymentRecord({
+                  id: parsed.id,
+                  project_id: parsed.project_id,
+                  organization_id: parsed.organization_id,
+                  status: parsed.status || 'ready',
+                  storage_path:
+                    parsed.storage_path ||
+                    `deployments/${parsed.organization_id}/${parsed.project_id}/${parsed.id}`,
+                  createdAt: Date.now(),
+                });
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
   // 2. STRUCTURED LOG: DEPLOYMENT_LOOKUP
   console.log('[DEPLOYMENT_LOOKUP]', {
     deploymentId,

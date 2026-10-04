@@ -68,6 +68,9 @@ function getSharedCookieDomain(): string | null {
   if (hostname === 'optic.doy.best' || hostname.endsWith('.optic.doy.best')) {
     return '.optic.doy.best';
   }
+  if (hostname.endsWith('.localhost')) {
+    return '.localhost';
+  }
   return null;
 }
 
@@ -80,22 +83,23 @@ function setCrossSubdomainCookie(name: string, value: string) {
   // Clean previous cookies / chunks
   removeCrossSubdomainCookie(name);
 
-  if (value.length <= 3500) {
-    document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(
-      value
-    )}; path=/; max-age=31536000; SameSite=Lax${domainStr}${secureStr}`;
+  const encodedVal = encodeURIComponent(value);
+  const maxChunkBytes = 2500;
+
+  if (encodedVal.length <= maxChunkBytes) {
+    document.cookie = `${encodeURIComponent(name)}=${encodedVal}; path=/; max-age=31536000; SameSite=Lax${domainStr}${secureStr}`;
+    document.cookie = `${encodeURIComponent(name)}=${encodedVal}; path=/; max-age=31536000; SameSite=Lax${secureStr}`;
     return;
   }
 
   // Chunk large session payload
-  const chunkSize = 3000;
-  const totalChunks = Math.ceil(value.length / chunkSize);
+  const totalChunks = Math.ceil(encodedVal.length / maxChunkBytes);
   document.cookie = `${encodeURIComponent(name)}=__chunks__:${totalChunks}; path=/; max-age=31536000; SameSite=Lax${domainStr}${secureStr}`;
+  document.cookie = `${encodeURIComponent(name)}=__chunks__:${totalChunks}; path=/; max-age=31536000; SameSite=Lax${secureStr}`;
   for (let i = 0; i < totalChunks; i++) {
-    const chunk = value.slice(i * chunkSize, (i + 1) * chunkSize);
-    document.cookie = `${encodeURIComponent(`${name}.${i}`)}=${encodeURIComponent(
-      chunk
-    )}; path=/; max-age=31536000; SameSite=Lax${domainStr}${secureStr}`;
+    const chunk = encodedVal.slice(i * maxChunkBytes, (i + 1) * maxChunkBytes);
+    document.cookie = `${encodeURIComponent(`${name}.${i}`)}=${chunk}; path=/; max-age=31536000; SameSite=Lax${domainStr}${secureStr}`;
+    document.cookie = `${encodeURIComponent(`${name}.${i}`)}=${chunk}; path=/; max-age=31536000; SameSite=Lax${secureStr}`;
   }
 }
 
@@ -107,24 +111,32 @@ function getCrossSubdomainCookie(name: string): string | null {
     for (let part of parts) {
       part = part.trim();
       if (part.indexOf(prefix) === 0) {
-        return decodeURIComponent(part.substring(prefix.length));
+        return part.substring(prefix.length);
       }
     }
     return null;
   };
 
-  const val = getSingle(name);
-  if (!val) return null;
-  if (val.startsWith('__chunks__:')) {
-    const total = parseInt(val.replace('__chunks__:', ''), 10);
+  const rawVal = getSingle(name);
+  if (!rawVal) return null;
+  if (rawVal.startsWith('__chunks__:')) {
+    const total = parseInt(rawVal.replace('__chunks__:', ''), 10);
     let full = '';
     for (let i = 0; i < total; i++) {
       const part = getSingle(`${name}.${i}`);
       if (part) full += part;
     }
-    return full || null;
+    try {
+      return decodeURIComponent(full);
+    } catch {
+      return full || null;
+    }
   }
-  return val;
+  try {
+    return decodeURIComponent(rawVal);
+  } catch {
+    return rawVal;
+  }
 }
 
 function removeCrossSubdomainCookie(name: string) {
@@ -132,8 +144,10 @@ function removeCrossSubdomainCookie(name: string) {
   const domain = getSharedCookieDomain();
   const domainStr = domain ? `; domain=${domain}` : '';
   document.cookie = `${encodeURIComponent(name)}=; path=/; max-age=0; SameSite=Lax${domainStr}`;
-  for (let i = 0; i < 6; i++) {
+  document.cookie = `${encodeURIComponent(name)}=; path=/; max-age=0; SameSite=Lax`;
+  for (let i = 0; i < 8; i++) {
     document.cookie = `${encodeURIComponent(`${name}.${i}`)}=; path=/; max-age=0; SameSite=Lax${domainStr}`;
+    document.cookie = `${encodeURIComponent(`${name}.${i}`)}=; path=/; max-age=0; SameSite=Lax`;
   }
 }
 

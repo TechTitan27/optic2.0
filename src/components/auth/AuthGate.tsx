@@ -1,9 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Button } from '../common/Button';
-import { Card } from '../common/Card';
+import { getSupabase } from '../../lib/supabaseClient';
+import { Skeleton } from '../common/Skeleton';
 import { OpticLogo } from '../brand/OpticLogo';
-import { Lock, ArrowRight, ShieldCheck } from 'lucide-react';
 
 interface AuthGateProps {
   children: React.ReactNode;
@@ -16,66 +15,159 @@ export const AuthGate: React.FC<AuthGateProps> = ({
   children,
   surfaceName,
   onOpenAuth,
-  onGoHome,
 }) => {
-  const { user, loading } = useAuth();
+  const { user, loading, refreshSession } = useAuth();
+  const [checkingCrossDomain, setCheckingCrossDomain] = useState<boolean>(true);
 
-  if (loading && !user) {
-    return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <OpticLogo size={32} />
-          <p className="text-xs font-mono text-zinc-500 animate-pulse">
-            Authenticating session with Supabase...
-          </p>
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    let active = true;
 
-  if (!user) {
+    // If user is already authenticated in context, skip check
+    if (user) {
+      setCheckingCrossDomain(false);
+      return;
+    }
+
+    if (!loading) {
+      // Check session across subdomains and Supabase cookies
+      const verifySession = async () => {
+        try {
+          await refreshSession();
+          if (!active) return;
+
+          const sb = getSupabase();
+          if (sb) {
+            const { data } = await sb.auth.getSession();
+            if (data?.session?.user) {
+              setCheckingCrossDomain(false);
+              return;
+            }
+          }
+
+          // If no session found across subdomains/cookies, automatically redirect to login page
+          if (active) {
+            onOpenAuth();
+          }
+        } catch {
+          if (active) {
+            onOpenAuth();
+          }
+        }
+      };
+
+      verifySession();
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [user, loading, refreshSession, onOpenAuth]);
+
+  // While authenticating, verifying cross-subdomain sessions, or redirecting:
+  // Render a sleek, authentic Optic developer dashboard skeleton (NO pop-up, NO modal, NO manual button click)
+  if (!user || checkingCrossDomain) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col justify-center items-center p-4">
-        <div className="w-full max-w-md space-y-6">
-          <div className="text-center space-y-2">
-            <div className="flex justify-center mb-4">
-              <OpticLogo size={32} showWordmark={true} />
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex overflow-hidden font-sans">
+        {/* Desktop Sidebar Skeleton */}
+        <aside className="hidden md:flex flex-col w-60 border-r border-zinc-800 bg-zinc-950 shrink-0 p-4 space-y-6">
+          <div className="h-10 flex items-center justify-between border-b border-zinc-800 pb-3">
+            <div className="flex items-center gap-2">
+              <OpticLogo size={18} />
+              <div className="w-16 h-4 bg-zinc-800 rounded animate-pulse" />
             </div>
-            <h1 className="text-xl font-bold tracking-tight text-white">
-              Authentication Required
-            </h1>
-            <p className="text-xs text-zinc-400">
-              You must be signed in to access <span className="text-zinc-200 font-semibold">{surfaceName}</span>.
-            </p>
+            <div className="w-6 h-6 bg-zinc-900 border border-zinc-800 rounded-md" />
           </div>
 
-          <Card className="p-6 space-y-4">
-            <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 flex items-start gap-3">
-              <ShieldCheck size={18} className="text-emerald-400 shrink-0 mt-0.5" />
-              <div className="text-xs text-zinc-400 leading-relaxed">
-                <strong className="text-zinc-200">Unified Developer Account:</strong> Single session token across <code className="text-sky-400 font-mono">optic.doy.best</code>, <code className="text-sky-400 font-mono">cloud.optic.doy.best</code>, and <code className="text-sky-400 font-mono">hosting.optic.doy.best</code>.
+          <div className="space-y-1.5">
+            <div className="w-20 h-2.5 bg-zinc-800/60 rounded text-[10px]" />
+            <div className="w-full h-9 bg-zinc-900 border border-zinc-800/80 rounded-lg animate-pulse" />
+          </div>
+
+          <div className="space-y-2 pt-2">
+            <div className="w-16 h-2.5 bg-zinc-800/60 rounded text-[10px]" />
+            <div className="w-full h-8 bg-zinc-900/60 rounded-lg animate-pulse" />
+            <div className="w-full h-8 bg-zinc-900/60 rounded-lg animate-pulse" />
+            <div className="w-full h-8 bg-zinc-900/60 rounded-lg animate-pulse" />
+          </div>
+
+          <div className="space-y-2 pt-4 mt-auto border-t border-zinc-800/60">
+            <div className="w-full h-8 bg-zinc-900/40 rounded-lg animate-pulse" />
+            <div className="w-full h-8 bg-zinc-900/40 rounded-lg animate-pulse" />
+          </div>
+        </aside>
+
+        {/* Main View Skeleton */}
+        <div className="flex-1 flex flex-col min-w-0 bg-zinc-950">
+          {/* Header Skeleton */}
+          <div className="h-14 border-b border-zinc-800 px-6 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="w-32 h-5 bg-zinc-800/80 rounded-md animate-pulse" />
+              <div className="w-14 h-4 bg-emerald-500/10 border border-emerald-500/20 rounded-md" />
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="w-24 h-8 bg-zinc-900 border border-zinc-800 rounded-lg" />
+              <div className="w-8 h-8 rounded-full bg-zinc-800 animate-pulse" />
+            </div>
+          </div>
+
+          {/* Body Content Skeleton */}
+          <div className="flex-1 p-6 space-y-6 max-w-6xl w-full mx-auto overflow-y-auto">
+            {/* Top Banner / Actions row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-800/80">
+              <div className="space-y-2">
+                <div className="w-48 h-6 bg-zinc-800/90 rounded-md animate-pulse" />
+                <div className="w-72 h-3.5 bg-zinc-800/50 rounded animate-pulse" />
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-24 h-8 bg-zinc-900 border border-zinc-800 rounded-lg animate-pulse" />
+                <div className="w-28 h-8 bg-indigo-600/30 border border-indigo-500/30 rounded-lg animate-pulse" />
               </div>
             </div>
 
-            <div className="space-y-2.5 pt-2">
-              <Button
-                variant="primary"
-                className="w-full"
-                onClick={onOpenAuth}
-                icon={<Lock size={14} />}
-              >
-                Sign In with Supabase
-              </Button>
-
-              <Button
-                variant="ghost"
-                className="w-full text-zinc-400"
-                onClick={onGoHome}
-              >
-                Back to Public Homepage
-              </Button>
+            {/* Stat / Feature Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-900/40 space-y-3">
+                <div className="w-24 h-3 bg-zinc-800/70 rounded" />
+                <div className="w-32 h-6 bg-zinc-800 rounded animate-pulse" />
+                <div className="w-40 h-2.5 bg-zinc-800/50 rounded" />
+              </div>
+              <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-900/40 space-y-3">
+                <div className="w-24 h-3 bg-zinc-800/70 rounded" />
+                <div className="w-28 h-6 bg-zinc-800 rounded animate-pulse" />
+                <div className="w-36 h-2.5 bg-zinc-800/50 rounded" />
+              </div>
+              <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-900/40 space-y-3">
+                <div className="w-24 h-3 bg-zinc-800/70 rounded" />
+                <div className="w-36 h-6 bg-zinc-800 rounded animate-pulse" />
+                <div className="w-48 h-2.5 bg-zinc-800/50 rounded" />
+              </div>
             </div>
-          </Card>
+
+            {/* Item List Skeleton */}
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 divide-y divide-zinc-800/60 overflow-hidden">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="p-4 flex items-center justify-between gap-4 animate-pulse">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 shrink-0" />
+                    <div className="space-y-1.5">
+                      <div className="w-36 h-4 bg-zinc-800/90 rounded" />
+                      <div className="w-56 h-3 bg-zinc-800/50 rounded" />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-16 h-6 rounded-md bg-zinc-800/60" />
+                    <div className="w-16 h-6 rounded-md bg-zinc-800/60" />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Discreet status notice */}
+            <div className="flex items-center justify-center gap-2 text-xs font-mono text-zinc-500 py-3">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+              <span>Verifying Optic developer session across subdomains...</span>
+            </div>
+          </div>
         </div>
       </div>
     );
