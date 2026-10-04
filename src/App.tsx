@@ -23,6 +23,7 @@ import { AuthPage } from './components/auth/AuthPage';
 import { AuthGate } from './components/auth/AuthGate';
 import { PrivacyPage } from './components/legal/PrivacyPage';
 import { TermsPage } from './components/legal/TermsPage';
+import { StatusPage } from './components/status/StatusPage';
 import { PublicSharePage } from './components/share/PublicSharePage';
 import { NotFoundPage } from './components/common/NotFoundPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -30,7 +31,7 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 function MainApp() {
   const { user } = useAuth();
 
-  // Public deployment route guard: /api/deployments/* and *.host.optic.doy.best must NEVER render the Optic React SPA
+  // Public deployment route guard: /api/deployments/* and *.host.doy.best must NEVER render the Optic React SPA
   if (
     typeof window !== 'undefined' &&
     (window.location.hostname.includes('.host.') ||
@@ -164,6 +165,7 @@ function MainApp() {
         else if (surface === 'api') nextUrl = '/api';
         else if (surface === 'privacy') nextUrl = '/privacy';
         else if (surface === 'terms') nextUrl = '/terms';
+        else if (surface === 'status') nextUrl = '/status';
         else if (surface === 'login') nextUrl = '/login';
         else if (surface === 'signup') nextUrl = '/signup';
         else if (surface === 'callback') nextUrl = '/auth/callback';
@@ -362,6 +364,11 @@ function MainApp() {
 
         {currentSurface === 'terms' && (
           <TermsPage onNavigateSurface={handleNavigateSurface} />
+        )}
+
+        {/* Platform Infrastructure Health & Status Page */}
+        {currentSurface === 'status' && (
+          <StatusPage onNavigate={handleNavigateSurface} />
         )}
 
         {/* Public Shared File View Page (No Login Required) */}

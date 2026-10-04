@@ -102,7 +102,7 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
     projectSlug ||
     projectName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') ||
     'my-project';
-  const previewDomain = `${displaySlug}.host.optic.doy.best`;
+  const previewDomain = `${displaySlug}.host.doy.best`;
 
   // Escape key handler
   useEffect(() => {

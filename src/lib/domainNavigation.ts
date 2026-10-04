@@ -133,6 +133,8 @@ export function getSurfaceUrl(surface: SurfaceType, path: string = '/'): string 
         return 'https://optic.doy.best/privacy';
       case 'terms':
         return 'https://optic.doy.best/terms';
+      case 'status':
+        return 'https://optic.doy.best/status';
       case 'share':
         return `https://cloud.optic.doy.best${path.startsWith('/') ? path : `/${path}`}`;
       default:
@@ -154,6 +156,8 @@ export function getSurfaceUrl(surface: SurfaceType, path: string = '/'): string 
       return path.startsWith('/api') ? path : '/api';
     case 'dashboard':
       return path.startsWith('/dashboard') ? path : '/dashboard';
+    case 'status':
+      return '/status';
     case 'main':
       return '/';
     case 'login':
@@ -409,6 +413,11 @@ export function resolveSurfaceState(): {
       return { surface: 'api', path: '/' };
     }
 
+    // Status & System Health
+    if (pathname === '/status' || pathname.startsWith('/status')) {
+      return { surface: 'status', path: '/status' };
+    }
+
     // Auth & Legal
     if (pathname === '/login' || pathname === '/signin') return { surface: 'login', path: '/login' };
     if (pathname === '/signup' || pathname === '/register') return { surface: 'signup', path: '/signup' };
@@ -472,6 +481,7 @@ export function resolveSurfaceState(): {
   if (pathname === '/dashboard' || pathname.startsWith('/dashboard')) {
     return { surface: 'dashboard', path: '/dashboard', tab: 'overview' };
   }
+  if (pathname === '/status' || pathname.startsWith('/status')) return { surface: 'status', path: '/status' };
   if (pathname === '/login' || pathname === '/signin') return { surface: 'login', path: '/login' };
   if (pathname === '/signup' || pathname === '/register') return { surface: 'signup', path: '/signup' };
   if (pathname.startsWith('/privacy')) return { surface: 'privacy', path: '/privacy' };

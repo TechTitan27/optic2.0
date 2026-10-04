@@ -346,7 +346,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
       if (ok) {
         setProductionDeploymentId(dep.id);
         toast.success(
-          `Deployment #${dep.seqNumber} is now active in production on ${selectedProject.slug}.host.optic.doy.best`,
+          `Deployment #${dep.seqNumber} is now active in production on ${selectedProject.slug}.host.doy.best`,
           'Production Target Updated'
         );
       } else {
@@ -560,7 +560,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
 
   // Canonical Production, Immutable URLs, and Working Direct Live Endpoint
   const currentProdUrl = selectedProject
-    ? `https://${selectedProject.slug}.host.optic.doy.best`
+    ? `https://${selectedProject.slug}.host.doy.best`
     : '';
   const directEndpointUrl = selectedProject
     ? `${hostOrigin}/api/deployments/${selectedProject.slug}/`
@@ -646,28 +646,28 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
 
               {/* Production Live Endpoint & Custom Domain */}
               <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
-                {/* Working Direct Live Endpoint */}
-                <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded-lg">
+                {/* Primary Production Domain: https://<project-slug>.host.doy.best */}
+                <div className="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-2.5 py-1 rounded-lg">
                   <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-semibold flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                    Endpoint:
+                    Production:
                   </span>
                   <a
-                    href={directEndpointUrl}
+                    href={currentProdUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-mono text-zinc-200 hover:text-white flex items-center gap-1 transition-colors underline decoration-zinc-700"
-                    title="Direct live endpoint (always online)"
+                    className="font-mono text-zinc-100 hover:text-indigo-300 flex items-center gap-1 transition-colors font-medium underline decoration-zinc-700"
+                    title={`Open production URL: ${currentProdUrl}`}
                   >
-                    <span>{directEndpointUrl.replace(/^https?:\/\/[^/]+/, '')}</span>
+                    <span>{currentProdUrl.replace('https://', '')}</span>
                     <ArrowUpRight size={11} className="text-zinc-400" />
                   </a>
                   <button
-                    onClick={() => handleCopy(directEndpointUrl, 'direct-endpoint')}
-                    className="text-zinc-500 hover:text-zinc-300 p-0.5 transition-colors"
-                    title="Copy direct live endpoint"
+                    onClick={() => handleCopy(currentProdUrl, 'prod-url')}
+                    className="text-zinc-500 hover:text-zinc-300 p-0.5 transition-colors ml-0.5"
+                    title="Copy production domain"
                   >
-                    {copiedUrl === 'direct-endpoint' ? (
+                    {copiedUrl === 'prod-url' ? (
                       <Check size={11} className="text-emerald-400" />
                     ) : (
                       <Copy size={11} />
@@ -675,25 +675,25 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                   </button>
                 </div>
 
-                {/* Subdomain Wildcard Domain */}
+                {/* Direct Endpoint */}
                 <div className="flex items-center gap-1.5 text-zinc-400">
-                  <span className="text-[11px] font-mono text-zinc-500">Domain:</span>
+                  <span className="text-[11px] font-mono text-zinc-500">Endpoint:</span>
                   <a
-                    href={currentProdUrl}
+                    href={directEndpointUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-mono text-indigo-400/90 hover:text-indigo-300 flex items-center gap-1 transition-colors"
-                    title="Requires wildcard DNS (*.host.optic.doy.best)"
+                    className="font-mono text-zinc-400 hover:text-zinc-200 flex items-center gap-1 transition-colors"
+                    title="Direct API endpoint fallback"
                   >
-                    <span>{currentProdUrl.replace('https://', '')}</span>
+                    <span>{directEndpointUrl.replace(/^https?:\/\/[^/]+/, '')}</span>
                     <ArrowUpRight size={11} />
                   </a>
                   <button
-                    onClick={() => handleCopy(currentProdUrl, 'prod-url')}
+                    onClick={() => handleCopy(directEndpointUrl, 'direct-endpoint')}
                     className="text-zinc-500 hover:text-zinc-300 p-0.5 transition-colors"
-                    title="Copy wildcard domain"
+                    title="Copy direct live endpoint"
                   >
-                    {copiedUrl === 'prod-url' ? (
+                    {copiedUrl === 'direct-endpoint' ? (
                       <Check size={11} className="text-emerald-400" />
                     ) : (
                       <Copy size={11} />
@@ -708,11 +708,11 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                 size="sm"
                 variant="primary"
                 onClick={() => {
-                  window.open(directEndpointUrl, '_blank');
+                  window.open(currentProdUrl, '_blank');
                 }}
                 icon={<ExternalLink size={13} />}
               >
-                Visit Live Site
+                Visit
               </Button>
               <Button
                 size="sm"
@@ -857,7 +857,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                 ) : (
                   <div className="divide-y divide-zinc-800/60">
                     {numberedDeployments.map((dep) => {
-                      const immutableHostUrl = `https://${dep.id}.host.optic.doy.best`;
+                      const immutableHostUrl = `https://${dep.id}.host.doy.best`;
                       const directApiUrl = `${hostOrigin}/api/deployments/${dep.id}/`;
 
                       return (
@@ -1018,20 +1018,25 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                 </Card>
 
                 <Card className="p-4 border-zinc-800 bg-zinc-900/40 space-y-2">
-                  <div className="text-[11px] font-mono text-zinc-500 uppercase">Wildcard Domain</div>
+                  <div className="text-[11px] font-mono text-emerald-400 uppercase font-semibold flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    Production URL
+                  </div>
                   <div className="flex items-center justify-between gap-2">
                     <a
                       href={currentProdUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-sm font-mono text-indigo-400 hover:underline truncate"
+                      className="text-sm font-mono text-zinc-100 hover:text-indigo-300 hover:underline truncate font-medium flex items-center gap-1"
+                      title={`Open ${currentProdUrl}`}
                     >
-                      {currentProdUrl.replace('https://', '')}
+                      <span>{currentProdUrl.replace('https://', '')}</span>
+                      <ArrowUpRight size={12} className="text-zinc-400 shrink-0" />
                     </a>
                     <button
                       onClick={() => handleCopy(currentProdUrl, 'overview-prod')}
                       className="text-zinc-500 hover:text-zinc-300 p-1"
-                      title="Copy domain"
+                      title="Copy production domain"
                     >
                       {copiedUrl === 'overview-prod' ? (
                         <Check size={13} className="text-emerald-400" />
@@ -1041,7 +1046,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                     </button>
                   </div>
                   <p className="text-[11px] text-zinc-400">
-                    Custom edge host. Requires wildcard DNS setup on your domain.
+                    Always routes to the project's current production deployment.
                   </p>
                 </Card>
 
@@ -1249,7 +1254,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {filteredProjects.map((proj) => {
-                const prodUrl = `https://${proj.slug}.host.optic.doy.best`;
+                const prodUrl = `https://${proj.slug}.host.doy.best`;
 
                 return (
                   <div
@@ -1279,14 +1284,26 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                         </span>
                       </div>
 
-                      {/* Live endpoint & Domain display */}
-                      <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-                        <div className="flex items-center gap-1 text-emerald-400/90 group-hover:text-emerald-300 transition-colors">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          <span className="truncate">{`/api/deployments/${proj.slug}/`}</span>
+                      {/* Production URL & Live endpoint display */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+                        <div className="flex items-center gap-1.5 text-zinc-300 group-hover:text-indigo-300 transition-colors">
+                          <Globe size={11} className="text-emerald-400" />
+                          <span className="font-medium truncate">{`${proj.slug}.host.doy.best`}</span>
                         </div>
-                        <span className="text-zinc-600">·</span>
-                        <span className="text-zinc-500 truncate">{`${proj.slug}.host...`}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopy(prodUrl, `card-${proj.id}`);
+                          }}
+                          className="text-zinc-500 hover:text-zinc-300 p-0.5 transition-colors"
+                          title="Copy production URL"
+                        >
+                          {copiedUrl === `card-${proj.id}` ? (
+                            <Check size={11} className="text-emerald-400" />
+                          ) : (
+                            <Copy size={11} />
+                          )}
+                        </button>
                       </div>
                     </div>
 

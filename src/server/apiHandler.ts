@@ -102,8 +102,28 @@ export async function handleApiRequest(
   next: () => void
 ) {
   const url = req.url || '';
+  const hostHeader = (
+    (req.headers['x-forwarded-host'] as string) ||
+    (req.headers['host'] as string) ||
+    ''
+  ).toLowerCase().split(':')[0];
 
-  if (!url.startsWith('/api') && !url.startsWith('/status')) {
+  // 0. Host-based deployed sites (*.host.doy.best, *.host.optic.doy.best, *.host.localhost)
+  // or explicit /api/deployments/:deploymentId/* paths must enter public static file serving directly.
+  // Never let the Vite SPA fallback capture deployed-site requests.
+  const isDeployedHost =
+    hostHeader.endsWith('.host.doy.best') ||
+    hostHeader.endsWith('.host.optic.doy.best') ||
+    hostHeader.endsWith('.host.localhost');
+
+  if (
+    isDeployedHost ||
+    url.startsWith('/api/deployments')
+  ) {
+    return handleDeploymentRequest(req, res);
+  }
+
+  if (!url.startsWith('/api')) {
     return next();
   }
 
@@ -127,21 +147,6 @@ export async function handleApiRequest(
     action = (parsed.searchParams.get('action') || '').toLowerCase().trim();
   } catch {
     pathname = url.split('?')[0];
-  }
-
-  const hostHeader = (
-    (req.headers['x-forwarded-host'] as string) ||
-    (req.headers['host'] as string) ||
-    ''
-  ).toLowerCase().split(':')[0];
-
-  // 0. GET/HEAD /api/deployments/:deploymentId/* or *.host.optic.doy.best (REAL PUBLIC STATIC FILE SERVER)
-  if (
-    hostHeader.includes('.host.') ||
-    url.startsWith('/api/deployments') ||
-    pathname.startsWith('/api/deployments')
-  ) {
-    return handleDeploymentRequest(req, res);
   }
 
   // 1. POST /api/waitlist
@@ -1382,11 +1387,9 @@ export async function handleApiRequest(
     }
   }
 
-  // 13. GET /status, /api/status, /api/health, or /api/storage?action=status
+  // 13. GET /api/status, /api/health, or /api/storage?action=status
   const isStatusEndpoint =
-    (url === '/status' ||
-      url.startsWith('/status?') ||
-      url === '/api/status' ||
+    (url === '/api/status' ||
       url.startsWith('/api/status?') ||
       url === '/api/health' ||
       url.startsWith('/api/health?') ||

@@ -6,6 +6,7 @@ export type SurfaceType =
   | 'docs'
   | 'api'
   | 'settings'
+  | 'status'
   | 'login'
   | 'signup'
   | 'callback'

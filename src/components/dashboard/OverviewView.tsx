@@ -664,7 +664,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
             <Button
               size="sm"
               variant="outline"
-              onClick={() => setStatusModalOpen(true)}
+              onClick={() => onNavigateSurface('status', '/status')}
               icon={<Activity size={13} className="text-emerald-400" />}
               className="text-xs"
             >

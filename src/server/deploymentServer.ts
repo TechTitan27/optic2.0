@@ -262,8 +262,8 @@ export async function resolveProductionDeploymentId(
 /**
  * Extracts deploymentId and relative subpath from any URL, rewrite format, or custom host.
  * Supports:
- * 1. Host-based project URLs: https://my-project.host.optic.doy.best/ -> project slug -> production deployment
- * 2. Host-based immutable URLs: https://<deployment-id>.host.optic.doy.best/ -> direct deployment ID
+ * 1. Host-based project URLs: https://<project-slug>.host.doy.best/ -> project slug -> production deployment
+ * 2. Host-based immutable URLs: https://<deployment-id>.host.doy.best/ -> direct deployment ID
  * 3. Public API paths: /api/deployments/:deploymentId/*
  */
 export async function resolveRequestTarget(
@@ -297,8 +297,8 @@ export async function resolveRequestTarget(
   const parsed = new URL(candidate, 'http://localhost');
   const pathname = parsed.pathname;
 
-  // 1. Host-based wildcard routing check: *.host.optic.doy.best or *.host.localhost
-  const hostMatch = host.match(/^([a-z0-9_-]+)\.host\.(?:optic\.doy\.best|localhost)$/i);
+  // 1. Host-based wildcard routing check: *.host.doy.best, *.host.optic.doy.best, or *.host.localhost
+  const hostMatch = host.match(/^([a-z0-9_-]+)\.host\.(?:doy\.best|optic\.doy\.best|localhost)$/i);
   if (hostMatch) {
     const subdomain = hostMatch[1].toLowerCase();
     const rawSubpath = pathname.replace(/^\/+/, '');

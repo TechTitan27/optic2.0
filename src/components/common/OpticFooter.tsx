@@ -43,6 +43,13 @@ export const OpticFooter: React.FC<OpticFooterProps> = ({
             >
               Docs
             </button>
+            <button
+              onClick={() => onNavigateSurface('status', '/status')}
+              className="hover:text-zinc-200 transition-colors flex items-center gap-1 text-emerald-400/90"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              Status
+            </button>
             <span>•</span>
             <button
               onClick={() => onNavigateSurface('privacy', '/privacy')}
@@ -153,6 +160,15 @@ export const OpticFooter: React.FC<OpticFooterProps> = ({
                 className="hover:text-zinc-200 transition-colors"
               >
                 API Keys
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => onNavigateSurface('status', '/status')}
+                className="hover:text-zinc-200 transition-colors flex items-center gap-1.5"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span>System Status</span>
               </button>
             </li>
           </ul>

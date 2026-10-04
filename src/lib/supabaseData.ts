@@ -831,7 +831,7 @@ export const supabaseData = {
       const prodDomain =
         latestDep?.deploymentUrl ||
         latestDep?.url ||
-        (latestDep?.id ? `/api/deployments/${latestDep.id}/` : `https://${p.slug}.optic.doy.best`);
+        `https://${p.slug}.host.doy.best`;
       return {
         id: p.id,
         organization_id: p.organization_id || orgId,
@@ -840,7 +840,7 @@ export const supabaseData = {
         description: p.description || undefined,
         framework: 'react',
         productionDomain: prodDomain,
-        assignedSubdomain: `${p.slug}.optic.doy.best`,
+        assignedSubdomain: `${p.slug}.host.doy.best`,
         customDomains: [],
         gitBranch: 'main',
         status: (latestDep?.status as any) || 'ready',
