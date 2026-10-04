@@ -40,6 +40,14 @@ import {
   ArrowLeft,
   Info,
   ShieldCheck,
+  Lock,
+  Unlock,
+  Globe,
+  Key,
+  Eye,
+  EyeOff,
+  Sparkles,
+  Settings,
 } from 'lucide-react';
 
 interface CloudInterfaceProps {
@@ -165,6 +173,11 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
   const [renameValue, setRenameValue] = useState('');
   const [selectedFileForDetail, setSelectedFileForDetail] = useState<FileItem | null>(null);
   const [shareModalFile, setShareModalFile] = useState<FileItem | null>(null);
+  const [currentShareToken, setCurrentShareToken] = useState<string>('');
+  const [shareAccessLevel, setShareAccessLevel] = useState<'public' | 'password'>('public');
+  const [sharePassword, setSharePassword] = useState('');
+  const [shareShowPassword, setShareShowPassword] = useState(false);
+  const [savingShareSettings, setSavingShareSettings] = useState(false);
   const [generatedShareUrl, setGeneratedShareUrl] = useState<string | null>(null);
   const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
   const [shareExpirationOption, setShareExpirationOption] = useState<'none' | '24' | '168' | '720'>('none');
@@ -393,6 +406,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
       const hours = expOption === 'none' ? null : parseInt(expOption, 10);
       const link = await supabaseData.createShareLink(userId, file.id, hours);
       setGeneratedShareUrl(link.shareUrl);
+      setCurrentShareToken(link.token);
       if (link.expiresAt) {
         setShareExpiresAt(
           new Date(link.expiresAt).toLocaleDateString('en-US', {
@@ -417,8 +431,58 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
 
   const handleOpenShareModal = (file: FileItem) => {
     setShareModalFile(file);
+    setShareAccessLevel('public');
+    setSharePassword('');
+    setShareShowPassword(false);
     setShareExpirationOption('none');
     generateFileShareLink(file, 'none');
+  };
+
+  const handleGenerateSharePassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
+    let res = '';
+    for (let i = 0; i < 12; i++) {
+      res += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setSharePassword(res);
+    setShareShowPassword(true);
+    toast.info('Secure random password generated.');
+  };
+
+  const handleSaveShareSettings = async () => {
+    if (!shareModalFile || !currentShareToken) return;
+
+    if (shareAccessLevel === 'password' && !sharePassword.trim()) {
+      toast.error('Please enter a password for protected access.', 'Missing Password');
+      return;
+    }
+
+    setSavingShareSettings(true);
+    try {
+      const hours = shareExpirationOption === 'none' ? null : parseInt(shareExpirationOption, 10);
+      const res = await storageService.updateShareSettings({
+        token: currentShareToken,
+        fileId: shareModalFile.id,
+        accessLevel: shareAccessLevel,
+        password: shareAccessLevel === 'password' ? sharePassword.trim() : undefined,
+        expiresInHours: hours,
+      });
+
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to update share settings.');
+      }
+
+      toast.success(
+        shareAccessLevel === 'password'
+          ? 'File access set to Password Protected (Private).'
+          : 'File access set to Public (Anyone with link).',
+        'Settings Saved'
+      );
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to save access settings.', 'Error');
+    } finally {
+      setSavingShareSettings(false);
+    }
   };
 
   // Create folder
@@ -1191,7 +1255,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
         </Modal>
       )}
 
-      {/* Share Link Modal with table share_links */}
+      {/* Share Link & Access Settings Modal */}
       {shareModalFile && (
         <Modal
           isOpen={Boolean(shareModalFile)}
@@ -1199,10 +1263,11 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
             setShareModalFile(null);
             setCopiedLink(false);
           }}
-          title="Share File"
-          description={`Create a public link for ${shareModalFile.name}`}
+          title="Share & Access Settings"
+          description={`Configure access permissions for "${shareModalFile.name}"`}
         >
           <div className="space-y-4">
+            {/* Public Share URL */}
             <div className="space-y-1.5">
               <label className="text-xs text-zinc-400 font-medium">Public Share URL</label>
               <div className="flex items-center gap-2 p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-xs text-zinc-200">
@@ -1237,6 +1302,90 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
               </div>
             </div>
 
+            {/* Access Permission Control */}
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-zinc-300">Who can access this file?</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShareAccessLevel('public')}
+                  className={`p-3 rounded-xl border text-left transition-all flex flex-col gap-1 ${
+                    shareAccessLevel === 'public'
+                      ? 'border-emerald-500/80 bg-emerald-500/10 text-white'
+                      : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-semibold text-xs">
+                    <Globe size={13} className={shareAccessLevel === 'public' ? 'text-emerald-400' : 'text-zinc-400'} />
+                    <span>Anyone with link</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-500 leading-tight">
+                    Public link. Anyone with this link can view &amp; download.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShareAccessLevel('password')}
+                  className={`p-3 rounded-xl border text-left transition-all flex flex-col gap-1 ${
+                    shareAccessLevel === 'password'
+                      ? 'border-emerald-500/80 bg-emerald-500/10 text-white'
+                      : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-semibold text-xs">
+                    <Lock size={13} className={shareAccessLevel === 'password' ? 'text-emerald-400' : 'text-zinc-400'} />
+                    <span>Password Protected</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-500 leading-tight">
+                    Private link. Visitors must enter a password to unlock.
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            {/* Password input when Password Protected is chosen */}
+            {shareAccessLevel === 'password' && (
+              <div className="space-y-2 p-3.5 rounded-xl bg-zinc-950 border border-zinc-800">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-zinc-300 flex items-center gap-1.5">
+                    <Key size={13} className="text-emerald-400" />
+                    <span>File Password</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleGenerateSharePassword}
+                    className="text-[11px] text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1 transition-colors"
+                  >
+                    <Sparkles size={11} />
+                    <span>Generate Password</span>
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <input
+                    type={shareShowPassword ? 'text' : 'password'}
+                    placeholder="Enter access password..."
+                    value={sharePassword}
+                    onChange={(e) => setSharePassword(e.target.value)}
+                    className="w-full bg-zinc-900 border border-zinc-800 focus:border-emerald-500 rounded-lg px-3 py-2 text-xs text-white placeholder-zinc-500 font-mono outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShareShowPassword(!shareShowPassword)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 p-0.5"
+                  >
+                    {shareShowPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-zinc-500">
+                  Anyone apart from you will need this password in order to access this file.
+                </p>
+              </div>
+            )}
+
+            {/* Link Expiration */}
             <div className="space-y-1.5">
               <label className="text-xs text-zinc-400 font-medium">Link Expiration</label>
               <select
@@ -1248,7 +1397,7 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
                     generateFileShareLink(shareModalFile, val);
                   }
                 }}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 cursor-pointer"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 cursor-pointer font-mono"
               >
                 <option value="none">No expiration (Permanent)</option>
                 <option value="24">Expires in 24 hours (1 day)</option>
@@ -1263,11 +1412,17 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
               </div>
             )}
 
-            <div className="text-[11px] text-zinc-400 leading-relaxed bg-zinc-950 p-3 rounded-lg border border-zinc-800">
-              Anyone with this link can view and download the file. Visitors do not need an Optic account to access this public link.
-            </div>
+            {/* Actions */}
+            <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-zinc-800">
+              <Button
+                variant="primary"
+                onClick={handleSaveShareSettings}
+                loading={savingShareSettings}
+                className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold"
+              >
+                Save Settings
+              </Button>
 
-            <div className="flex gap-2">
               {generatedShareUrl &&
                 !generatedShareUrl.startsWith('Generating') &&
                 !generatedShareUrl.startsWith('Failed') && (
@@ -1281,9 +1436,9 @@ export const CloudInterface: React.FC<CloudInterfaceProps> = ({
                     <ExternalLink size={13} />
                   </a>
                 )}
+
               <Button
-                variant="primary"
-                className="flex-1"
+                variant="outline"
                 onClick={() => {
                   setShareModalFile(null);
                   setCopiedLink(false);

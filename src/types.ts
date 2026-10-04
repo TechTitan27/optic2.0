@@ -20,6 +20,8 @@ export interface SharedFileData {
     token: string;
     expiresAt: string | null;
     createdAt: string;
+    accessLevel?: 'public' | 'password';
+    hasPassword?: boolean;
   };
   file: {
     id: string;
@@ -29,10 +31,15 @@ export interface SharedFileData {
     sizeBytes: number;
     createdAt: string;
     updatedAt: string;
+    userId?: string;
   };
   uploader: {
     name: string;
   };
+  isProtected?: boolean;
+  requiresPassword?: boolean;
+  isUnlocked?: boolean;
+  isOwner?: boolean;
   previewUrl?: string;
   downloadUrl?: string;
   expired?: boolean;
@@ -81,6 +88,8 @@ export interface FileItem {
   createdAt: string;
   updatedAt: string;
   isPublic?: boolean;
+  accessLevel?: 'public' | 'password';
+  hasPassword?: boolean;
 }
 
 export interface FolderItem {

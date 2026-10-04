@@ -48,6 +48,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const isSettingsActive = (currentSurface === 'dashboard' || !currentSurface) && currentTab === 'settings';
 
   const getPageTitle = () => {
+    if (currentSurface === 'share') return 'Shared File';
     if (currentSurface === 'cloud') return 'Cloud Storage';
     if (currentSurface === 'hosting') return 'Hosting & Deployments';
     if (currentSurface === 'api') return 'Developer API';
@@ -57,7 +58,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     return 'Overview';
   };
 
-  const isWideSurface = ['cloud', 'hosting', 'docs', 'api'].includes(currentSurface);
+  const isWideSurface = ['cloud', 'hosting', 'docs', 'api', 'share'].includes(currentSurface);
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans">

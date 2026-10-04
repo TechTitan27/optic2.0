@@ -331,14 +331,16 @@ export class OpticStorageService {
   }
 
   /**
-   * Fetch public shared file metadata and short-lived presigned URLs (unauthenticated access)
+   * Fetch public shared file metadata and short-lived presigned URLs (unauthenticated access or authenticated owner)
    */
-  async getSharedFile(token: string): Promise<{
+  async getSharedFile(token: string, password?: string): Promise<{
     success: boolean;
     share?: {
       token: string;
       expiresAt: string | null;
       createdAt: string;
+      accessLevel?: 'public' | 'password';
+      hasPassword?: boolean;
     };
     file?: {
       id: string;
@@ -348,10 +350,15 @@ export class OpticStorageService {
       sizeBytes: number;
       createdAt: string;
       updatedAt: string;
+      userId?: string;
     };
     uploader?: {
       name: string;
     };
+    isProtected?: boolean;
+    requiresPassword?: boolean;
+    isUnlocked?: boolean;
+    isOwner?: boolean;
     previewUrl?: string;
     downloadUrl?: string;
     expired?: boolean;
@@ -359,8 +366,23 @@ export class OpticStorageService {
     error?: string;
   }> {
     try {
-      const res = await fetch(`/api/share?token=${encodeURIComponent(token)}`, {
+      const headers: Record<string, string> = {};
+      const authToken = await this.getAuthToken();
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+      if (password) {
+        headers['x-share-password'] = password;
+      }
+
+      let fetchUrl = `/api/share?token=${encodeURIComponent(token)}`;
+      if (password) {
+        fetchUrl += `&password=${encodeURIComponent(password)}`;
+      }
+
+      const res = await fetch(fetchUrl, {
         method: 'GET',
+        headers,
       });
       const data = await res.json();
       return data;
@@ -368,6 +390,44 @@ export class OpticStorageService {
       return {
         success: false,
         error: err?.message || 'Failed to connect to storage service.',
+      };
+    }
+  }
+
+  /**
+   * Update file share access settings (public vs password protected)
+   */
+  async updateShareSettings(params: {
+    token: string;
+    fileId: string;
+    accessLevel: 'public' | 'password';
+    password?: string;
+    expiresInHours?: number | null;
+  }): Promise<{ success: boolean; error?: string; settings?: any }> {
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      const authToken = await this.getAuthToken();
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+
+      const res = await fetch('/api/share/settings', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(params),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to update share settings.');
+      }
+      return data;
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || 'Failed to update share settings.',
       };
     }
   }

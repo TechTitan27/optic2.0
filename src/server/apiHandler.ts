@@ -24,6 +24,10 @@ import {
   setProductionDeployment,
   resolveProductionDeploymentId,
 } from './deploymentServer.js';
+import {
+  getShareSettings,
+  setShareSettings,
+} from './shareSecurity.js';
 
 interface WaitlistEntry {
   email: string;
@@ -1137,7 +1141,71 @@ export async function handleApiRequest(
         }
       }
 
-      // 5. Generate short-lived presigned GET URLs from R2
+      // 5. Check Access Control & Password Protection Settings
+      const shareSettings = await getShareSettings(token);
+      const isPasswordProtected = shareSettings?.accessLevel === 'password' && Boolean(shareSettings?.password);
+
+      // Authenticate requesting user if token is present in header
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const currentUser = await verifyUserToken(authHeader);
+      const isOwner = Boolean(
+        currentUser &&
+        currentUser.id &&
+        (currentUser.id === file.user_id || currentUser.id === shareLink.user_id)
+      );
+
+      const providedPassword = (
+        parsedUrl.searchParams.get('password') ||
+        (req.headers['x-share-password'] as string) ||
+        ''
+      ).trim();
+
+      const passwordMatches =
+        isPasswordProtected &&
+        Boolean(providedPassword) &&
+        Boolean(shareSettings?.password) &&
+        providedPassword === shareSettings?.password;
+
+      // Access is granted if not protected, if user is owner, or if password matches
+      const isUnlocked = !isPasswordProtected || isOwner || passwordMatches;
+
+      const safeExtension =
+        (file as any).extension ||
+        (file.name && file.name.includes('.') ? file.name.split('.').pop() || '' : '');
+
+      // If locked, return metadata only (do NOT generate or leak presigned URLs)
+      if (!isUnlocked) {
+        return sendJson(res, 200, {
+          success: true,
+          isProtected: true,
+          requiresPassword: true,
+          isUnlocked: false,
+          isOwner: false,
+          share: {
+            token: shareLink.token,
+            expiresAt: shareLink.expires_at || null,
+            createdAt: shareLink.created_at,
+            accessLevel: 'password',
+            hasPassword: true,
+          },
+          file: {
+            id: file.id,
+            name: file.name,
+            extension: safeExtension,
+            mimeType: file.mime_type || 'application/octet-stream',
+            sizeBytes: Number(file.size_bytes) || 0,
+            createdAt: file.created_at,
+            updatedAt: file.updated_at,
+            userId: file.user_id,
+          },
+          uploader: {
+            name: uploaderName,
+          },
+          error: providedPassword ? 'Incorrect access password. Please try again.' : undefined,
+        });
+      }
+
+      // 6. Generate short-lived presigned GET URLs from R2 for unlocked access
       let previewUrl = '';
       let downloadUrl = '';
       const r2Config = getR2Config();
@@ -1172,16 +1240,18 @@ export async function handleApiRequest(
         return res.end();
       }
 
-      const safeExtension =
-        (file as any).extension ||
-        (file.name && file.name.includes('.') ? file.name.split('.').pop() || '' : '');
-
       return sendJson(res, 200, {
         success: true,
+        isProtected: isPasswordProtected,
+        requiresPassword: false,
+        isUnlocked: true,
+        isOwner,
         share: {
           token: shareLink.token,
           expiresAt: shareLink.expires_at || null,
           createdAt: shareLink.created_at,
+          accessLevel: isPasswordProtected ? 'password' : 'public',
+          hasPassword: isPasswordProtected,
         },
         file: {
           id: file.id,
@@ -1191,6 +1261,7 @@ export async function handleApiRequest(
           sizeBytes: Number(file.size_bytes) || 0,
           createdAt: file.created_at,
           updatedAt: file.updated_at,
+          userId: file.user_id,
         },
         uploader: {
           name: uploaderName,
@@ -1203,6 +1274,83 @@ export async function handleApiRequest(
       return sendJson(res, 500, {
         success: false,
         error: err?.message || 'Failed to process share link',
+      });
+    }
+  }
+
+  // 9c. POST /api/share/settings or /api/storage?action=share-settings
+  if (
+    ((pathname === '/api/storage' && action === 'share-settings') ||
+      pathname === '/api/share/settings' ||
+      pathname.startsWith('/api/share/settings')) &&
+    method === 'POST'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user) {
+        return sendJson(res, 401, {
+          success: false,
+          error: 'Unauthorized. Please sign in to update file access settings.',
+        });
+      }
+
+      const body = await parseJsonBody(req);
+      const { token, fileId, accessLevel, password, expiresInHours } = body;
+
+      if (!token) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'Share token is required.',
+        });
+      }
+
+      const level = accessLevel === 'password' ? 'password' : 'public';
+      const cleanPassword = level === 'password' ? (password || '').trim() : undefined;
+
+      if (level === 'password' && !cleanPassword) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'A password is required for password-protected access.',
+        });
+      }
+
+      const saved = await setShareSettings({
+        token,
+        fileId: fileId || '',
+        accessLevel: level,
+        password: cleanPassword,
+      });
+
+      // Optionally update expiration in share_links if requested
+      if (expiresInHours !== undefined) {
+        const sb = getSupabaseServerClient();
+        if (sb) {
+          const newExpiresAt =
+            expiresInHours && expiresInHours > 0
+              ? new Date(Date.now() + expiresInHours * 3600000).toISOString()
+              : null;
+          await sb
+            .from('share_links')
+            .update({ expires_at: newExpiresAt })
+            .eq('token', token);
+        }
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        settings: {
+          token: saved.token,
+          accessLevel: saved.accessLevel,
+          hasPassword: Boolean(saved.password),
+          updatedAt: saved.updatedAt,
+        },
+      });
+    } catch (err: any) {
+      console.error('[API /api/share/settings] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to update share settings.',
       });
     }
   }

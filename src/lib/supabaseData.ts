@@ -506,6 +506,34 @@ export const supabaseData = {
         ? new Date(Date.now() + expiresInHours * 3600000).toISOString()
         : null;
 
+    // Check if an existing share link already exists for this file to preserve access settings
+    try {
+      const { data: existing } = await sb
+        .from('share_links')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('file_id', fileId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existing && existing.token) {
+        if (expiresInHours !== undefined) {
+          await sb
+            .from('share_links')
+            .update({ expires_at: expiresAt })
+            .eq('id', existing.id);
+        }
+        return {
+          shareUrl: getShareLinkUrl(existing.token),
+          token: existing.token,
+          expiresAt: expiresInHours !== undefined ? expiresAt : existing.expires_at,
+        };
+      }
+    } catch (checkErr) {
+      console.warn('[Supabase] Note checking existing share link:', checkErr);
+    }
+
     console.log('[Supabase] Creating share link in public.share_links for file:', fileId);
 
     const { data, error } = await sb
