@@ -144,6 +144,9 @@ export interface HostingProject {
   gitRepo?: string;
   gitBranch?: string;
   gitProvider?: string;
+  gitOwner?: string;
+  gitRepoName?: string;
+  gitRepoId?: number;
   buildCommand?: string;
   outputDirectory?: string;
   packageManager?: string;

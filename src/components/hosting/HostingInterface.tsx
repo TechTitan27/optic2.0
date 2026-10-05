@@ -643,9 +643,14 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                   Ready
                 </span>
                 {selectedProject.gitRepo && (
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-300">
-                    <GitBranch size={11} className="text-emerald-400" />
-                    <span>{selectedProject.gitRepo}</span>
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-300">
+                    <GitBranch size={12} className="text-emerald-400 shrink-0" />
+                    <span className="text-zinc-500">Repository:</span>
+                    <span className="text-zinc-100 font-bold">
+                      {selectedProject.gitOwner && selectedProject.gitRepoName && !selectedProject.gitRepo.includes('/')
+                        ? `${selectedProject.gitOwner}/${selectedProject.gitRepoName}`
+                        : selectedProject.gitRepo}
+                    </span>
                     <span className="text-zinc-500">({selectedProject.gitBranch || 'main'})</span>
                   </div>
                 )}
@@ -1293,11 +1298,16 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
 
                       {/* GitHub Repository Targeting info if connected */}
                       {proj.gitRepo && (
-                        <div className="flex items-center gap-1.5 text-[11px] font-mono text-zinc-400 bg-zinc-950 px-2 py-1 rounded-md border border-zinc-800/80">
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono text-zinc-400 bg-zinc-950 px-2.5 py-1 rounded-md border border-zinc-800/80">
                           <GitBranch size={11} className="text-emerald-400 shrink-0" />
-                          <span className="truncate">{proj.gitRepo}</span>
+                          <span className="text-zinc-500">Repository:</span>
+                          <span className="text-zinc-200 font-bold truncate">
+                            {proj.gitOwner && proj.gitRepoName && !proj.gitRepo.includes('/')
+                              ? `${proj.gitOwner}/${proj.gitRepoName}`
+                              : proj.gitRepo}
+                          </span>
                           <span className="text-zinc-600">·</span>
-                          <span className="text-zinc-500">{proj.gitBranch || 'main'}</span>
+                          <span className="text-zinc-400">{proj.gitBranch || 'main'}</span>
                         </div>
                       )}
 

@@ -15,6 +15,7 @@ import {
   FolderGit2,
   Sparkles,
   Info,
+  X,
 } from 'lucide-react';
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
@@ -392,7 +393,11 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
       let newProject: HostingProject;
 
       if (sourceMode === 'github' && selectedRepo) {
-        // Create project with GitHub connection configuration
+        // Guarantee fullName is formatted strictly as owner/repository-name
+        const repoFullName = selectedRepo.fullName.includes('/')
+          ? selectedRepo.fullName
+          : `${selectedRepo.owner.login}/${selectedRepo.name}`;
+
         newProject = await supabaseData.createHostingProject(currentOrg.id, {
           name: projectName.trim(),
           slug: cleanSlug,
@@ -400,15 +405,25 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
           framework: selectedFramework,
           creatorName: activeCreator,
           userId: user?.id,
-          gitRepo: selectedRepo.fullName,
+          gitRepo: repoFullName,
           gitBranch: selectedBranch || selectedRepo.defaultBranch || 'main',
+          gitOwner: selectedRepo.owner.login,
+          gitRepoName: selectedRepo.name,
+          gitRepoDetails: {
+            githubRepoId: selectedRepo.id,
+            owner: selectedRepo.owner.login,
+            name: selectedRepo.name,
+            fullName: repoFullName,
+            defaultBranch: selectedRepo.defaultBranch || 'main',
+            selectedBranch: selectedBranch || selectedRepo.defaultBranch || 'main',
+          },
           buildCommand: fw.defaultBuildCommand,
           outputDirectory: fw.defaultOutputDirectory,
           rootDirectory: rootDirectory.trim() || undefined,
         });
 
         toast.success(
-          `Project "${newProject.name}" connected to ${selectedRepo.fullName} (${selectedBranch}).`,
+          `Project "${newProject.name}" connected to ${repoFullName} (${selectedBranch}).`,
           'GitHub Project Configured'
         );
       } else {
@@ -479,10 +494,29 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
         </button>
       </div>
 
+      {/* Page Heading */}
       <div className="space-y-1.5">
-        <h1 className="text-xl font-bold tracking-tight text-zinc-100">Create a New Project</h1>
-        <p className="text-xs text-zinc-400">
-          Deploy, host, and scale websites on Optic Edge Hosting from GitHub or static assets.
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400 font-semibold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+            Edge Hosting
+          </span>
+          <span className="text-zinc-600">·</span>
+          <span className="text-xs text-zinc-500 font-mono">Phase 1</span>
+        </div>
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-100 flex items-center gap-2.5">
+          {sourceMode === 'github' ? (
+            <>
+              <GitHubLogoIcon size={22} className="text-white shrink-0" />
+              <span>Deploy from GitHub</span>
+            </>
+          ) : (
+            <span>Deploy Static Files</span>
+          )}
+        </h1>
+        <p className="text-xs text-zinc-400 max-w-xl leading-relaxed">
+          {sourceMode === 'github'
+            ? 'Import and connect an accessible GitHub repository to configure edge hosting deployments.'
+            : 'Deploy, host, and scale websites on Optic Edge Hosting from static assets.'}
         </p>
       </div>
 
@@ -621,45 +655,47 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
           {/* STATE C: Connected to GitHub -> Show Account Bar + Repository / Branch Picker */}
           {!checkingGithub && githubStatus.connected && (
             <div className="space-y-6">
-              {/* Connected Account Banner */}
-              <div className="p-3.5 rounded-xl border border-zinc-800 bg-zinc-900/60 flex items-center justify-between gap-4">
+              {/* Connected GitHub Account Indicator */}
+              <div className="p-3.5 rounded-xl border border-zinc-800 bg-zinc-900/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
                 <div className="flex items-center gap-3 min-w-0">
                   {githubStatus.account?.avatarUrl ? (
                     <img
                       src={githubStatus.account.avatarUrl}
                       alt={githubStatus.account.username}
-                      className="w-8 h-8 rounded-full border border-zinc-700 shrink-0"
+                      className="w-9 h-9 rounded-full border border-zinc-700 shrink-0 object-cover"
                     />
                   ) : (
-                    <div className="w-8 h-8 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-zinc-300 shrink-0">
-                      <GitHubLogoIcon size={16} />
+                    <div className="w-9 h-9 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-zinc-300 shrink-0">
+                      <GitHubLogoIcon size={18} />
                     </div>
                   )}
 
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-bold text-white truncate">
                         @{githubStatus.account?.username}
                       </span>
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                         Connected
                       </span>
                     </div>
-                    <p className="text-[11px] text-zinc-500 truncate">
-                      Authorized for repository import and branch targeting
+                    <p className="text-[11px] text-zinc-400 truncate">
+                      Connected GitHub Account · Accessible repositories loaded
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
                   <button
+                    type="button"
                     onClick={() => loadRepositories(repoSearchQuery)}
                     disabled={loadingRepos}
-                    className="p-1.5 rounded-lg border border-zinc-800 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+                    className="px-2.5 py-1.5 rounded-lg border border-zinc-800 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1.5 text-xs font-medium disabled:opacity-50"
                     title="Refresh repositories"
                   >
-                    <RotateCw size={13} className={loadingRepos ? 'animate-spin' : ''} />
+                    <RotateCw size={12} className={loadingRepos ? 'animate-spin' : ''} />
+                    <span>Refresh</span>
                   </button>
 
                   <Button
@@ -675,25 +711,49 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                 </div>
               </div>
 
+              {/* Error banner if repository query or branches failed */}
+              {errorMessage && !selectedRepo && (
+                <div className="p-3.5 rounded-xl border border-red-900/60 bg-red-950/20 text-xs text-red-300 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AlertCircle size={15} className="shrink-0 text-red-400" />
+                    <span className="truncate">{errorMessage}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => loadRepositories(repoSearchQuery)}
+                    className="px-2.5 py-1 rounded-md bg-red-900/40 hover:bg-red-900/60 text-red-200 text-[11px] font-medium transition-colors shrink-0"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
               {/* STEP 1: PICK REPOSITORY (If not yet selected) */}
               {!selectedRepo && (
                 <div className="p-5 rounded-2xl border border-zinc-800 bg-zinc-900/40 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
-                      <h2 className="text-sm font-bold text-white">Select a Repository</h2>
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-sm font-bold text-white tracking-tight">Select a Repository</h2>
+                        {!loadingRepos && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700/60">
+                            {filteredRepositories.length} available
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-zinc-400">
-                        Choose a repository from your GitHub account to connect to Optic.
+                        Choose a repository from your GitHub account to connect and deploy.
                       </p>
                     </div>
 
-                    {/* Visibility Filter */}
+                    {/* Visibility Filter Tabs */}
                     <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-950 border border-zinc-800 text-[11px]">
                       <button
                         type="button"
                         onClick={() => setVisibilityFilter('all')}
-                        className={`px-2 py-1 rounded transition-colors ${
+                        className={`px-2.5 py-1 rounded transition-colors ${
                           visibilityFilter === 'all'
-                            ? 'bg-zinc-800 text-white font-medium'
+                            ? 'bg-zinc-800 text-white font-medium shadow-xs'
                             : 'text-zinc-400 hover:text-zinc-200'
                         }`}
                       >
@@ -702,9 +762,9 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                       <button
                         type="button"
                         onClick={() => setVisibilityFilter('public')}
-                        className={`px-2 py-1 rounded transition-colors ${
+                        className={`px-2.5 py-1 rounded transition-colors ${
                           visibilityFilter === 'public'
-                            ? 'bg-zinc-800 text-white font-medium'
+                            ? 'bg-zinc-800 text-white font-medium shadow-xs'
                             : 'text-zinc-400 hover:text-zinc-200'
                         }`}
                       >
@@ -713,9 +773,9 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                       <button
                         type="button"
                         onClick={() => setVisibilityFilter('private')}
-                        className={`px-2 py-1 rounded transition-colors ${
+                        className={`px-2.5 py-1 rounded transition-colors ${
                           visibilityFilter === 'private'
-                            ? 'bg-zinc-800 text-white font-medium'
+                            ? 'bg-zinc-800 text-white font-medium shadow-xs'
                             : 'text-zinc-400 hover:text-zinc-200'
                         }`}
                       >
@@ -732,78 +792,133 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                     />
                     <input
                       type="text"
-                      placeholder="Search repositories by name or owner..."
+                      placeholder="Search repositories by name or owner (e.g. SpiderLabs/optic-site)..."
                       value={repoSearchQuery}
                       onChange={(e) => setRepoSearchQuery(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 focus:border-zinc-600 rounded-xl pl-9 pr-3.5 py-2 text-xs text-white placeholder-zinc-500 outline-none transition-colors"
+                      className="w-full bg-zinc-950 border border-zinc-800 focus:border-zinc-600 rounded-xl pl-9 pr-9 py-2 text-xs text-white placeholder-zinc-500 outline-none transition-colors"
                     />
+                    {repoSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setRepoSearchQuery('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 p-0.5"
+                        title="Clear search"
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
                   </div>
 
                   {/* Repositories List */}
                   {loadingRepos ? (
-                    <div className="space-y-2 py-4">
+                    <div className="space-y-2 py-2">
                       {[1, 2, 3, 4].map((i) => (
                         <div
                           key={i}
-                          className="p-3 rounded-xl border border-zinc-800/80 bg-zinc-950/60 animate-pulse flex items-center justify-between"
+                          className="p-3.5 rounded-xl border border-zinc-800/80 bg-zinc-950/60 animate-pulse flex items-center justify-between gap-4"
                         >
-                          <div className="space-y-1.5 flex-1">
-                            <div className="w-36 h-3.5 bg-zinc-800 rounded" />
-                            <div className="w-56 h-2.5 bg-zinc-800/70 rounded" />
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-zinc-800 shrink-0" />
+                            <div className="space-y-2 flex-1">
+                              <div className="w-48 h-3.5 bg-zinc-800 rounded" />
+                              <div className="w-72 h-2.5 bg-zinc-800/60 rounded" />
+                            </div>
                           </div>
-                          <div className="w-16 h-7 bg-zinc-800 rounded-lg" />
+                          <div className="w-16 h-7 bg-zinc-800 rounded-lg shrink-0" />
                         </div>
                       ))}
                     </div>
                   ) : filteredRepositories.length === 0 ? (
-                    <div className="py-12 px-4 text-center space-y-2 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40">
-                      <FolderGit2 size={24} className="mx-auto text-zinc-500" />
-                      <p className="text-xs font-semibold text-zinc-300">No repositories found</p>
-                      <p className="text-[11px] text-zinc-500 max-w-xs mx-auto">
-                        {repoSearchQuery
-                          ? `No repositories match "${repoSearchQuery}". Try adjusting your search.`
-                          : 'No repositories accessible for this GitHub account.'}
-                      </p>
+                    <div className="py-12 px-4 text-center space-y-3 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40">
+                      <FolderGit2 size={26} className="mx-auto text-zinc-500" />
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold text-zinc-200">No repositories found</p>
+                        <p className="text-[11px] text-zinc-500 max-w-sm mx-auto">
+                          {repoSearchQuery
+                            ? `No repositories match "${repoSearchQuery}". Try a different search term or clear the filter.`
+                            : 'No repositories accessible for this GitHub account.'}
+                        </p>
+                      </div>
+                      {repoSearchQuery && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setRepoSearchQuery('')}
+                          className="text-xs text-zinc-300 hover:text-white border-zinc-800"
+                        >
+                          Clear Search
+                        </Button>
+                      )}
                     </div>
                   ) : (
-                    <div className="max-h-[380px] overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                    <div className="max-h-[420px] overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                       {filteredRepositories.map((repo) => (
                         <div
                           key={repo.id}
-                          className="p-3 rounded-xl border border-zinc-800 bg-zinc-950 hover:border-zinc-700/80 transition-all flex items-center justify-between gap-4 group"
+                          className="p-3.5 rounded-xl border border-zinc-800 bg-zinc-950 hover:border-zinc-700/90 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 group"
                         >
-                          <div className="min-w-0 space-y-1 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-white group-hover:text-emerald-400 transition-colors truncate">
-                                {repo.fullName}
-                              </span>
-
-                              {repo.isPrivate ? (
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-mono bg-zinc-800 text-zinc-400 border border-zinc-700/60">
-                                  <Lock size={9} />
-                                  Private
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-mono bg-zinc-800 text-zinc-400 border border-zinc-700/60">
-                                  <Globe size={9} />
-                                  Public
-                                </span>
-                              )}
-
-                              <span className="inline-flex items-center gap-1 text-[10px] font-mono text-zinc-500">
-                                <GitBranch size={10} />
-                                {repo.defaultBranch}
-                              </span>
-                            </div>
-
-                            {repo.description && (
-                              <p className="text-[11px] text-zinc-400 line-clamp-1">
-                                {repo.description}
-                              </p>
+                          {/* Left: Owner Avatar & Repository Details */}
+                          <div className="flex items-start gap-3 min-w-0 flex-1">
+                            {repo.owner?.avatarUrl ? (
+                              <img
+                                src={repo.owner.avatarUrl}
+                                alt={repo.owner.login}
+                                className="w-7 h-7 rounded-md border border-zinc-800 shrink-0 mt-0.5 object-cover"
+                              />
+                            ) : (
+                              <div className="w-7 h-7 rounded-md bg-zinc-800 border border-zinc-700 flex items-center justify-center text-zinc-400 shrink-0 mt-0.5">
+                                <GitHubLogoIcon size={14} />
+                              </div>
                             )}
+
+                            <div className="min-w-0 flex-1 space-y-1.5">
+                              {/* Repository Full Name: owner/repository-name */}
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-400/90 font-semibold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                                  Repo
+                                </span>
+                                <span className="text-xs font-mono font-bold text-white group-hover:text-emerald-400 transition-colors truncate">
+                                  <span className="text-zinc-400 font-normal">{repo.owner.login}/</span>
+                                  <span className="text-white font-bold">{repo.name}</span>
+                                </span>
+
+                                {repo.isPrivate ? (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-900 text-zinc-400 border border-zinc-800">
+                                    <Lock size={9} />
+                                    Private
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                    <Globe size={9} />
+                                    Public
+                                  </span>
+                                )}
+
+                                <span className="inline-flex items-center gap-1 text-[10px] font-mono text-zinc-400 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
+                                  <GitBranch size={10} className="text-emerald-400" />
+                                  <span>{repo.defaultBranch}</span>
+                                </span>
+                              </div>
+
+                              {/* Explicit metadata breakdown: owner & name */}
+                              <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono text-zinc-400">
+                                <span>Owner: <strong className="text-zinc-300 font-normal">{repo.owner.login}</strong></span>
+                                <span className="text-zinc-700">·</span>
+                                <span>Name: <strong className="text-zinc-200 font-semibold">{repo.name}</strong></span>
+                                <span className="text-zinc-700">·</span>
+                                <span>Full: <span className="text-zinc-400">{repo.fullName}</span></span>
+                              </div>
+
+                              {repo.description && (
+                                <p className="text-[11px] text-zinc-400 line-clamp-1">
+                                  {repo.description}
+                                </p>
+                              )}
+                            </div>
                           </div>
 
-                          <div className="shrink-0 flex items-center gap-2">
+                          {/* Right: External link & Import button */}
+                          <div className="shrink-0 flex items-center gap-2 self-end sm:self-center">
                             <a
                               href={repo.htmlUrl}
                               target="_blank"
@@ -819,7 +934,7 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                               size="sm"
                               variant="outline"
                               onClick={() => handleSelectRepository(repo)}
-                              className="text-xs hover:border-emerald-500 hover:text-emerald-400"
+                              className="text-xs hover:border-emerald-500 hover:text-emerald-400 font-medium px-3"
                             >
                               Select
                             </Button>
@@ -834,23 +949,42 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
               {/* STEP 2: REPOSITORY SELECTED -> CONFIGURE BRANCH & CONFIRM PROJECT */}
               {selectedRepo && (
                 <form onSubmit={handleSubmit} className="space-y-5">
-                  {/* Selected Repository Header Card */}
-                  <div className="p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 flex items-center justify-between gap-4">
+                  {/* Selected Repository Card */}
+                  <div className="p-4 rounded-xl border border-emerald-500/40 bg-zinc-900/90 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-lg bg-zinc-900 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
-                        <GitHubLogoIcon size={18} />
-                      </div>
+                      {selectedRepo.owner?.avatarUrl ? (
+                        <img
+                          src={selectedRepo.owner.avatarUrl}
+                          alt={selectedRepo.owner.login}
+                          className="w-10 h-10 rounded-lg border border-emerald-500/40 shrink-0 object-cover"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-lg bg-zinc-950 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
+                          <GitHubLogoIcon size={20} />
+                        </div>
+                      )}
+
                       <div className="min-w-0 space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-white truncate">
-                            {selectedRepo.fullName}
-                          </span>
-                          <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-zinc-900 text-zinc-400 border border-zinc-800">
-                            {selectedRepo.isPrivate ? 'Private' : 'Public'}
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-emerald-400 font-semibold">
+                          <span>Repository:</span>
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-zinc-950 text-zinc-400 border border-zinc-800 lowercase">
+                            {selectedRepo.isPrivate ? 'private' : 'public'}
                           </span>
                         </div>
-                        <p className="text-[11px] text-zinc-400 truncate">
-                          Default branch: <span className="font-mono text-zinc-300">{selectedRepo.defaultBranch}</span>
+                        <div className="text-sm font-bold font-mono text-white flex items-center gap-1 truncate">
+                          <span className="text-zinc-400 font-normal">{selectedRepo.owner.login}/</span>
+                          <span className="text-white font-bold">{selectedRepo.name}</span>
+                        </div>
+                        <p className="text-[11px] text-zinc-400 flex items-center gap-2">
+                          <span>
+                            Default branch: <span className="font-mono text-zinc-300">{selectedRepo.defaultBranch}</span>
+                          </span>
+                          {selectedRepo.description && (
+                            <>
+                              <span className="text-zinc-600">·</span>
+                              <span className="truncate max-w-xs">{selectedRepo.description}</span>
+                            </>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -858,12 +992,12 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                     <Button
                       type="button"
                       size="sm"
-                      variant="ghost"
+                      variant="outline"
                       onClick={() => {
                         setSelectedRepo(null);
                         setBranches([]);
                       }}
-                      className="text-xs text-zinc-400 hover:text-zinc-200"
+                      className="text-xs text-zinc-300 hover:text-white border-zinc-700 shrink-0"
                     >
                       Change Repository
                     </Button>
@@ -872,12 +1006,12 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                   {/* Branch Selection */}
                   <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-900/40 space-y-3">
                     <div className="flex items-center justify-between">
-                      <label className="text-xs font-medium text-zinc-300 flex items-center gap-1.5">
+                      <label className="text-xs font-semibold text-zinc-200 flex items-center gap-1.5">
                         <GitBranch size={13} className="text-emerald-400" />
                         <span>Production Branch</span>
                       </label>
                       <span className="text-[11px] text-zinc-500 font-mono">
-                        {branches.length} branch(es) found
+                        {loadingBranches ? 'Loading branches...' : `${branches.length} branch(es) found`}
                       </span>
                     </div>
 
@@ -886,8 +1020,9 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                     </p>
 
                     {loadingBranches ? (
-                      <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 animate-pulse text-xs text-zinc-500">
-                        Loading branches from GitHub...
+                      <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 animate-pulse text-xs text-zinc-500 flex items-center gap-2">
+                        <RotateCw size={12} className="animate-spin text-emerald-400" />
+                        <span>Fetching branches from GitHub...</span>
                       </div>
                     ) : (
                       <div className="relative">
@@ -1029,9 +1164,9 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                       loading={submitting}
                       disabled={!projectName.trim() || submitting}
                       icon={<GitHubLogoIcon size={14} />}
-                      className="bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold"
+                      className="bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold px-4 py-2"
                     >
-                      Confirm &amp; Save Project
+                      Continue to Deploy
                     </Button>
                   </div>
                 </form>

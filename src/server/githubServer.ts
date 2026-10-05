@@ -319,34 +319,55 @@ export async function saveGitHubConnection(
   // 1. In-memory cache
   memoryConnections.set(userId, record);
 
-  // 2. Persist to Supabase public.github_connections
+  // 2. Persist to Supabase public.github_connections (exact schema: id, user_id, github_user_id, github_username, created_at)
   const sb = getSupabaseServerClient();
   if (sb) {
     try {
-      const { data, error } = await sb
+      // Find if a record already exists for this user_id
+      const { data: existing } = await sb
         .from('github_connections')
-        .upsert(
-          {
+        .select('id')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existing?.id) {
+        const { data: updated, error: updateErr } = await sb
+          .from('github_connections')
+          .update({
+            github_user_id: details.githubUserId,
+            github_username: details.githubUsername,
+          })
+          .eq('id', existing.id)
+          .select('id')
+          .maybeSingle();
+
+        if (updateErr) {
+          console.warn('[GitHubServer] Notice updating public.github_connections:', updateErr.message);
+        } else if (updated?.id) {
+          record.id = updated.id;
+        }
+      } else {
+        const { data: inserted, error: insertErr } = await sb
+          .from('github_connections')
+          .insert({
             user_id: userId,
             github_user_id: details.githubUserId,
             github_username: details.githubUsername,
-            avatar_url: details.avatarUrl || null,
-            access_token: encrypted,
-            scope: details.scope || 'repo,read:user',
-            updated_at: now,
-          },
-          { onConflict: 'user_id' }
-        )
-        .select()
-        .maybeSingle();
+            created_at: now,
+          })
+          .select('id')
+          .maybeSingle();
 
-      if (error) {
-        console.warn('[GitHubServer] Notice saving to public.github_connections:', error.message);
-      } else if (data?.id) {
-        record.id = data.id;
+        if (insertErr) {
+          console.warn('[GitHubServer] Notice inserting to public.github_connections:', insertErr.message);
+        } else if (inserted?.id) {
+          record.id = inserted.id;
+        }
       }
     } catch (err: any) {
-      console.warn('[GitHubServer] Database connection error during github_connections save:', err.message);
+      console.warn('[GitHubServer] Database connection notice during github_connections save:', err.message);
     }
   }
 
@@ -401,17 +422,17 @@ export async function getGitHubConnection(userId: string): Promise<GitHubConnect
         .maybeSingle();
 
       if (!error && data) {
-        const decrypted = decryptToken(data.access_token);
+        const decrypted = data.access_token ? decryptToken(data.access_token) : '';
         const record: GitHubConnectionRecord = {
           id: data.id,
           userId: data.user_id,
           githubUserId: data.github_user_id,
           githubUsername: data.github_username,
-          avatarUrl: data.avatar_url,
+          avatarUrl: data.avatar_url || `https://github.com/${data.github_username}.png`,
           accessToken: decrypted,
-          scope: data.scope,
+          scope: data.scope || 'repo,read:user',
           createdAt: data.created_at,
-          updatedAt: data.updated_at,
+          updatedAt: data.created_at,
         };
         memoryConnections.set(userId, record);
         return record;
@@ -516,21 +537,30 @@ export async function fetchGitHubRepositories(
     return [];
   }
 
-  let mapped: SanitizedGitHubRepository[] = rawRepos.map((r: any) => ({
-    id: r.id,
-    name: r.name,
-    fullName: r.full_name,
-    owner: {
-      login: r.owner?.login || '',
-      avatarUrl: r.owner?.avatar_url || '',
-      type: r.owner?.type || 'User',
-    },
-    isPrivate: Boolean(r.private),
-    defaultBranch: r.default_branch || 'main',
-    description: r.description || null,
-    updatedAt: r.updated_at,
-    htmlUrl: r.html_url,
-  }));
+  let mapped: SanitizedGitHubRepository[] = rawRepos.map((r: any) => {
+    const ownerLogin = (r.owner?.login || (r.full_name ? r.full_name.split('/')[0] : '')).trim();
+    const repoName = (r.name || (r.full_name ? r.full_name.split('/')[1] : '')).trim();
+    const fullName =
+      ownerLogin && repoName
+        ? `${ownerLogin}/${repoName}`
+        : (r.full_name || repoName || ownerLogin).trim();
+
+    return {
+      id: r.id,
+      name: repoName || fullName,
+      fullName: fullName,
+      owner: {
+        login: ownerLogin,
+        avatarUrl: r.owner?.avatar_url || '',
+        type: r.owner?.type || 'User',
+      },
+      isPrivate: Boolean(r.private),
+      defaultBranch: r.default_branch || 'main',
+      description: r.description || null,
+      updatedAt: r.updated_at,
+      htmlUrl: r.html_url || `https://github.com/${fullName}`,
+    };
+  });
 
   if (searchQuery && searchQuery.trim()) {
     const q = searchQuery.toLowerCase().trim();

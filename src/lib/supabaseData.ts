@@ -24,6 +24,36 @@ export interface FileRecordInput {
   isPublic?: boolean;
 }
 
+// Local persistence fallback for project git mapping in case columns are pending in remote Supabase DB
+interface ProjectGitCache {
+  gitRepo: string; // e.g. "SpiderLabs/optic-site"
+  gitBranch: string; // e.g. "main"
+  gitProvider?: string;
+  gitOwner?: string;
+  gitRepoName?: string;
+}
+
+function getStoredProjectGitMeta(key: string): ProjectGitCache | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(`optic_project_git_${key}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeProjectGitMeta(id: string, slug: string, meta: ProjectGitCache) {
+  if (typeof window === 'undefined') return;
+  try {
+    const serialized = JSON.stringify(meta);
+    localStorage.setItem(`optic_project_git_${id}`, serialized);
+    localStorage.setItem(`optic_project_git_${slug}`, serialized);
+  } catch {
+    // non-blocking
+  }
+}
+
 export const supabaseData = {
   /**
    * Fetch usage statistics for the authenticated user.
@@ -805,7 +835,7 @@ export const supabaseData = {
 
     const { data: pData, error: projErr } = await sb
       .from('projects')
-      .select('*')
+      .select('id, user_id, organization_id, name, slug, description, created_at, updated_at')
       .eq('organization_id', orgId)
       .order('created_at', { ascending: false });
 
@@ -854,12 +884,60 @@ export const supabaseData = {
       // non-blocking
     }
 
+    // Query github_repositories for linked repository configuration
+    const projectIds = projectsData.map((p: any) => p.id).filter(Boolean);
+    const githubReposByProjectId: Record<string, any> = {};
+    if (projectIds.length > 0) {
+      try {
+        const { data: ghRepos } = await sb
+          .from('github_repositories')
+          .select('*')
+          .in('project_id', projectIds);
+
+        if (ghRepos) {
+          for (const gr of ghRepos) {
+            githubReposByProjectId[gr.project_id] = gr;
+          }
+        }
+      } catch (ghErr: any) {
+        console.warn('[Supabase] Notice querying github_repositories:', ghErr.message);
+      }
+    }
+
     return (projectsData || []).map((p: any) => {
       const latestDep = deploymentsByProject[p.id];
       const prodDomain =
         latestDep?.deploymentUrl ||
         latestDep?.url ||
         `https://${p.slug}.host.doy.best`;
+
+      const linkedRepo = githubReposByProjectId[p.id];
+      const gitMeta = getStoredProjectGitMeta(p.id) || getStoredProjectGitMeta(p.slug);
+
+      // Determine owner, repo name, and full name
+      // RULE: Do not display only the GitHub username as the repository name!
+      // Display: owner/name (e.g. SpiderLabs/optic-site)
+      let owner = linkedRepo?.owner || gitMeta?.gitOwner || undefined;
+      let repoName = linkedRepo?.name || gitMeta?.gitRepoName || undefined;
+      let fullName =
+        linkedRepo?.full_name ||
+        (owner && repoName ? `${owner}/${repoName}` : undefined) ||
+        (gitMeta?.gitRepo && gitMeta.gitRepo.includes('/') ? gitMeta.gitRepo : undefined);
+
+      if (fullName && fullName.includes('/')) {
+        const parts = fullName.split('/');
+        if (!owner) owner = parts[0];
+        if (!repoName) repoName = parts[1];
+      } else if (fullName && !fullName.includes('/') && owner && repoName && owner !== repoName) {
+        fullName = `${owner}/${repoName}`;
+      }
+
+      const selectedBranch =
+        linkedRepo?.selected_branch ||
+        linkedRepo?.default_branch ||
+        gitMeta?.gitBranch ||
+        (fullName ? 'main' : undefined);
+
       return {
         id: p.id,
         organization_id: p.organization_id || orgId,
@@ -870,9 +948,12 @@ export const supabaseData = {
         productionDomain: prodDomain,
         assignedSubdomain: `${p.slug}.host.doy.best`,
         customDomains: [],
-        gitRepo: p.git_repo || undefined,
-        gitBranch: p.git_branch || 'main',
-        gitProvider: p.git_provider || (p.git_repo ? 'github' : undefined),
+        gitRepo: fullName,
+        gitBranch: selectedBranch,
+        gitProvider: fullName || linkedRepo ? 'github' : undefined,
+        gitOwner: owner,
+        gitRepoName: repoName,
+        gitRepoId: linkedRepo?.github_repo_id ? Number(linkedRepo.github_repo_id) : undefined,
         status: (latestDep?.status as any) || 'ready',
         latestDeployment: latestDep,
         createdAt: p.created_at || new Date().toISOString(),
@@ -884,6 +965,7 @@ export const supabaseData = {
   /**
    * Create a new hosting project under an organization in `public.projects`
    * Canonical public.projects schema: user_id, organization_id, name, slug, description
+   * Linked repository configuration is stored in `public.github_repositories`
    */
   async createHostingProject(
     orgId: string,
@@ -894,6 +976,17 @@ export const supabaseData = {
       framework?: string;
       gitRepo?: string;
       gitBranch?: string;
+      gitOwner?: string;
+      gitRepoName?: string;
+      gitRepoDetails?: {
+        githubRepoId?: number;
+        owner: string;
+        name: string;
+        fullName: string;
+        defaultBranch?: string;
+        selectedBranch?: string;
+        connectionId?: string;
+      };
       creatorName?: string;
       userId?: string;
       buildCommand?: string;
@@ -930,15 +1023,13 @@ export const supabaseData = {
 
     // STRICT: INSERT into public.projects using ONLY authoritative columns:
     // user_id, organization_id, name, slug, description
+    // (There is NO projects.git_branch column)
     const projectInsertPayload: {
       user_id: string;
       organization_id: string;
       name: string;
       slug: string;
       description?: string;
-      git_repo?: string;
-      git_branch?: string;
-      git_provider?: string;
     } = {
       user_id: verifiedUserId,
       organization_id: orgId,
@@ -949,37 +1040,96 @@ export const supabaseData = {
     if (input.description && input.description.trim()) {
       projectInsertPayload.description = input.description.trim();
     }
-    if (input.gitRepo && input.gitRepo.trim()) {
-      projectInsertPayload.git_repo = input.gitRepo.trim();
-      projectInsertPayload.git_branch = (input.gitBranch || 'main').trim();
-      projectInsertPayload.git_provider = 'github';
-    }
 
     console.log('[Supabase] Inserting project into public.projects:', projectInsertPayload);
 
-    let { data: projectData, error } = await sb
+    const { data: projectData, error } = await sb
       .from('projects')
       .insert(projectInsertPayload)
       .select()
       .single();
 
-    if (error && error.message.includes('git_repo')) {
-      console.warn('[Supabase] git_repo column not found, falling back to base columns:', error.message);
-      delete projectInsertPayload.git_repo;
-      delete projectInsertPayload.git_branch;
-      delete projectInsertPayload.git_provider;
-      const retryRes = await sb
-        .from('projects')
-        .insert(projectInsertPayload)
-        .select()
-        .single();
-      projectData = retryRes.data;
-      error = retryRes.error;
-    }
-
     if (error) {
       console.error('[Supabase] Failed to insert project into public.projects:', error);
       throw error;
+    }
+
+    // Resolve GitHub repository details for linking
+    const repoDetails = input.gitRepoDetails;
+    const rawGitRepo = input.gitRepo?.trim();
+
+    let owner = repoDetails?.owner || '';
+    let repoName = repoDetails?.name || '';
+    let fullName = repoDetails?.fullName || '';
+    const defaultBranch = repoDetails?.defaultBranch || 'main';
+    const selectedBranch = repoDetails?.selectedBranch || input.gitBranch || defaultBranch || 'main';
+    const repoId = repoDetails?.githubRepoId ? Number(repoDetails.githubRepoId) : 0;
+
+    if (!fullName && rawGitRepo) {
+      if (rawGitRepo.includes('/')) {
+        owner = rawGitRepo.split('/')[0];
+        repoName = rawGitRepo.split('/')[1];
+        fullName = rawGitRepo;
+      } else {
+        owner = input.gitOwner || '';
+        repoName = input.gitRepoName || rawGitRepo;
+        fullName = owner && repoName && owner !== repoName ? `${owner}/${repoName}` : rawGitRepo;
+      }
+    }
+
+    // Link GitHub repository record in public.github_repositories
+    if (fullName && projectData?.id) {
+      let connectionId = repoDetails?.connectionId;
+      if (!connectionId) {
+        try {
+          const { data: conn } = await sb
+            .from('github_connections')
+            .select('id')
+            .eq('user_id', verifiedUserId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          connectionId = conn?.id || null;
+        } catch {
+          // non-blocking
+        }
+      }
+
+      const now = new Date().toISOString();
+      const githubRepoPayload = {
+        connection_id: connectionId,
+        project_id: projectData.id,
+        github_repo_id: repoId,
+        owner,
+        name: repoName,
+        full_name: fullName,
+        default_branch: defaultBranch,
+        selected_branch: selectedBranch,
+        created_at: now,
+        updated_at: now,
+      };
+
+      try {
+        const { error: ghRepoError } = await sb
+          .from('github_repositories')
+          .insert(githubRepoPayload);
+
+        if (ghRepoError) {
+          console.warn('[Supabase] Notice inserting into github_repositories:', ghRepoError.message);
+        }
+      } catch (ghErr: any) {
+        console.warn('[Supabase] Database notice linking github_repositories:', ghErr.message);
+      }
+
+      // Persist in client meta cache as fallback
+      storeProjectGitMeta(projectData.id, projectData.slug, {
+        gitRepo: fullName,
+        gitBranch: selectedBranch,
+        gitProvider: 'github',
+        gitOwner: owner,
+        gitRepoName: repoName,
+      });
     }
 
     console.log('[PROJECT_CREATED]', {
@@ -987,6 +1137,8 @@ export const supabaseData = {
       organizationId: projectData.organization_id || orgId,
       name: projectData.name,
       slug: projectData.slug,
+      gitRepo: fullName || undefined,
+      gitBranch: selectedBranch || undefined,
     });
 
     const newProject: HostingProject = {
@@ -1006,8 +1158,12 @@ export const supabaseData = {
       productionDomain,
       assignedSubdomain: subdomain,
       customDomains: [],
-      gitRepo: input.gitRepo,
-      gitBranch: input.gitBranch || 'main',
+      gitRepo: fullName || undefined,
+      gitBranch: selectedBranch || undefined,
+      gitProvider: fullName ? 'github' : undefined,
+      gitOwner: owner || undefined,
+      gitRepoName: repoName || undefined,
+      gitRepoId: repoId || undefined,
       status: 'ready',
       createdAt: projectData.created_at || new Date().toISOString(),
       updatedAt: projectData.updated_at || projectData.created_at || new Date().toISOString(),
@@ -1037,6 +1193,12 @@ export const supabaseData = {
     if (error) {
       console.error('[Supabase] Error deleting project from public.projects:', error);
       throw error;
+    }
+
+    try {
+      await sb.from('github_repositories').delete().eq('project_id', projectId);
+    } catch {
+      // non-blocking cascade
     }
   },
 

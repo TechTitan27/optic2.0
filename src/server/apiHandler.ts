@@ -1323,42 +1323,66 @@ export async function handleApiRequest(
       const sb = getSupabaseServerClient();
       let projectRecord: any = null;
 
+      const rawGitRepo = (gitRepo || '').trim();
+      const owner = (body.owner || (rawGitRepo.includes('/') ? rawGitRepo.split('/')[0] : '')).trim();
+      const repoName = (body.repoName || (rawGitRepo.includes('/') ? rawGitRepo.split('/')[1] : rawGitRepo)).trim();
+      const fullName = owner && repoName ? `${owner}/${repoName}` : rawGitRepo;
+      const selectedBranch = (gitBranch || body.selectedBranch || 'main').trim();
+      const defaultBranch = (body.defaultBranch || selectedBranch || 'main').trim();
+
       if (sb) {
         try {
-          const payload: any = {
+          // STRICT: Canonical projects table schema has NO git_branch column
+          const projectPayload = {
             user_id: user.id,
             organization_id: orgId,
             name: name.trim(),
             slug: cleanSlug,
             description: description?.trim() || null,
-            git_repo: gitRepo.trim(),
-            git_branch: (gitBranch || 'main').trim(),
-            git_provider: 'github',
           };
 
-          const { data, error } = await sb
+          const { data: projData, error: projErr } = await sb
             .from('projects')
-            .insert(payload)
+            .insert(projectPayload)
             .select()
             .maybeSingle();
 
-          if (error) {
-            // If git_repo column hasn't been migrated yet in user's DB, fallback safely
-            if (error.message.includes('git_repo')) {
-              delete payload.git_repo;
-              delete payload.git_branch;
-              delete payload.git_provider;
-              const fallback = await sb
-                .from('projects')
-                .insert(payload)
-                .select()
-                .maybeSingle();
-              projectRecord = fallback.data;
-            } else {
-              throw error;
+          if (projErr) {
+            throw projErr;
+          }
+
+          projectRecord = projData;
+
+          // Link to github_repositories
+          if (projectRecord?.id && fullName) {
+            // Find user connection ID
+            const { data: conn } = await sb
+              .from('github_connections')
+              .select('id')
+              .eq('user_id', user.id)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            const now = new Date().toISOString();
+            const { error: repoErr } = await sb
+              .from('github_repositories')
+              .insert({
+                connection_id: conn?.id || null,
+                project_id: projectRecord.id,
+                github_repo_id: body.githubRepoId || 0,
+                owner,
+                name: repoName,
+                full_name: fullName,
+                default_branch: defaultBranch,
+                selected_branch: selectedBranch,
+                created_at: now,
+                updated_at: now,
+              });
+
+            if (repoErr) {
+              console.warn('[API /api/hosting/github/save-project] Notice creating github_repositories record:', repoErr.message);
             }
-          } else {
-            projectRecord = data;
           }
         } catch (dbErr: any) {
           console.warn('[API /api/hosting/github/save-project] DB exception:', dbErr.message);
@@ -1375,8 +1399,11 @@ export async function handleApiRequest(
         productionDomain: `https://${cleanSlug}.host.doy.best`,
         assignedSubdomain: `${cleanSlug}.host.doy.best`,
         customDomains: [],
-        gitRepo: gitRepo.trim(),
-        gitBranch: (gitBranch || 'main').trim(),
+        gitRepo: fullName,
+        gitBranch: selectedBranch,
+        gitProvider: 'github',
+        gitOwner: owner,
+        gitRepoName: repoName,
         buildCommand,
         outputDirectory,
         rootDirectory,
