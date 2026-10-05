@@ -870,7 +870,9 @@ export const supabaseData = {
         productionDomain: prodDomain,
         assignedSubdomain: `${p.slug}.host.doy.best`,
         customDomains: [],
-        gitBranch: 'main',
+        gitRepo: p.git_repo || undefined,
+        gitBranch: p.git_branch || 'main',
+        gitProvider: p.git_provider || (p.git_repo ? 'github' : undefined),
         status: (latestDep?.status as any) || 'ready',
         latestDeployment: latestDep,
         createdAt: p.created_at || new Date().toISOString(),
@@ -934,6 +936,9 @@ export const supabaseData = {
       name: string;
       slug: string;
       description?: string;
+      git_repo?: string;
+      git_branch?: string;
+      git_provider?: string;
     } = {
       user_id: verifiedUserId,
       organization_id: orgId,
@@ -944,14 +949,33 @@ export const supabaseData = {
     if (input.description && input.description.trim()) {
       projectInsertPayload.description = input.description.trim();
     }
+    if (input.gitRepo && input.gitRepo.trim()) {
+      projectInsertPayload.git_repo = input.gitRepo.trim();
+      projectInsertPayload.git_branch = (input.gitBranch || 'main').trim();
+      projectInsertPayload.git_provider = 'github';
+    }
 
     console.log('[Supabase] Inserting project into public.projects:', projectInsertPayload);
 
-    const { data: projectData, error } = await sb
+    let { data: projectData, error } = await sb
       .from('projects')
       .insert(projectInsertPayload)
       .select()
       .single();
+
+    if (error && error.message.includes('git_repo')) {
+      console.warn('[Supabase] git_repo column not found, falling back to base columns:', error.message);
+      delete projectInsertPayload.git_repo;
+      delete projectInsertPayload.git_branch;
+      delete projectInsertPayload.git_provider;
+      const retryRes = await sb
+        .from('projects')
+        .insert(projectInsertPayload)
+        .select()
+        .single();
+      projectData = retryRes.data;
+      error = retryRes.error;
+    }
 
     if (error) {
       console.error('[Supabase] Failed to insert project into public.projects:', error);

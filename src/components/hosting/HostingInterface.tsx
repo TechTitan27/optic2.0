@@ -642,6 +642,13 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                   Ready
                 </span>
+                {selectedProject.gitRepo && (
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] font-mono bg-zinc-900 border border-zinc-800 text-zinc-300">
+                    <GitBranch size={11} className="text-emerald-400" />
+                    <span>{selectedProject.gitRepo}</span>
+                    <span className="text-zinc-500">({selectedProject.gitBranch || 'main'})</span>
+                  </div>
+                )}
               </div>
 
               {/* Production Live Endpoint & Custom Domain */}
@@ -1283,6 +1290,16 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                           Ready
                         </span>
                       </div>
+
+                      {/* GitHub Repository Targeting info if connected */}
+                      {proj.gitRepo && (
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono text-zinc-400 bg-zinc-950 px-2 py-1 rounded-md border border-zinc-800/80">
+                          <GitBranch size={11} className="text-emerald-400 shrink-0" />
+                          <span className="truncate">{proj.gitRepo}</span>
+                          <span className="text-zinc-600">·</span>
+                          <span className="text-zinc-500">{proj.gitBranch || 'main'}</span>
+                        </div>
+                      )}
 
                       {/* Production URL & Live endpoint display */}
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">

@@ -143,6 +143,7 @@ export interface HostingProject {
   customDomains: string[];
   gitRepo?: string;
   gitBranch?: string;
+  gitProvider?: string;
   buildCommand?: string;
   outputDirectory?: string;
   packageManager?: string;

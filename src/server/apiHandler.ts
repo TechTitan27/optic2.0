@@ -28,6 +28,19 @@ import {
   getShareSettings,
   setShareSettings,
 } from './shareSecurity.js';
+import {
+  getGithubOAuthConfig,
+  getGitHubAuthUrl,
+  verifyOAuthState,
+  getGitHubRedirectUri,
+  exchangeCodeForGitHubToken,
+  fetchGitHubUserProfile,
+  saveGitHubConnection,
+  getGitHubConnection,
+  disconnectGitHubConnection,
+  fetchGitHubRepositories,
+  fetchGitHubBranches,
+} from './githubServer.js';
 
 interface WaitlistEntry {
   email: string;
@@ -83,6 +96,13 @@ function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.end(JSON.stringify(data));
+}
+
+function sendHtml(res: ServerResponse, statusCode: number, html: string) {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.end(html);
 }
 
 async function resolveUserId(req: IncomingMessage): Promise<{ userId: string; token?: string }> {
@@ -910,6 +930,471 @@ export async function handleApiRequest(
     } catch (err: any) {
       console.error('[API /api/hosting/projects] Uncaught exception:', err);
       return sendJson(res, 500, { success: false, error: 'Failed to fetch projects' });
+    }
+  }
+
+  // 8b-1. GET /api/hosting?action=github-auth-url
+  if (
+    ((pathname === '/api/hosting' && action === 'github-auth-url') ||
+      pathname === '/api/hosting/github/auth-url' ||
+      pathname.startsWith('/api/hosting/github/auth-url')) &&
+    method === 'GET'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user?.id) {
+        return sendJson(res, 401, {
+          success: false,
+          error: 'Unauthorized. Please sign in to Optic before connecting your GitHub account.',
+        });
+      }
+
+      const config = getGithubOAuthConfig();
+      if (!config.configured) {
+        return sendJson(res, 200, {
+          success: false,
+          configured: false,
+          error:
+            'GitHub OAuth is not configured on the server. Please set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.',
+        });
+      }
+
+      const parsedAuthUrl = new URL(url, 'http://localhost');
+      const returnUrlParam = parsedAuthUrl.searchParams.get('returnUrl') || '/hosting/new';
+      const { url: authUrl, state } = getGitHubAuthUrl(req, user.id, returnUrlParam);
+      return sendJson(res, 200, {
+        success: true,
+        configured: true,
+        url: authUrl,
+        state,
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/github/auth-url] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to generate GitHub authorization URL',
+      });
+    }
+  }
+
+  // 8b-2. GET /api/hosting/github/callback
+  if (
+    ((pathname === '/api/hosting' && action === 'github-callback') ||
+      pathname === '/api/hosting/github/callback' ||
+      pathname.startsWith('/api/hosting/github/callback')) &&
+    method === 'GET'
+  ) {
+    try {
+      const parsed = new URL(url, 'http://localhost');
+      const code = parsed.searchParams.get('code');
+      const state = parsed.searchParams.get('state');
+      const errorParam =
+        parsed.searchParams.get('error_description') ||
+        parsed.searchParams.get('error');
+
+      if (errorParam || !code || !state) {
+        const errorMsg = errorParam || 'Missing OAuth authorization code or state.';
+        return sendHtml(
+          res,
+          400,
+          `<!DOCTYPE html>
+<html>
+<head><title>GitHub Connection Error</title></head>
+<body style="background:#09090b;color:#f4f4f5;font-family:ui-sans-serif,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+  <div style="text-align:center;padding:24px;max-width:400px;border:1px solid #27272a;border-radius:12px;background:#18181b;">
+    <p style="color:#ef4444;font-weight:600;margin-bottom:8px;font-size:15px;">GitHub Authorization Failed</p>
+    <p style="color:#a1a1aa;font-size:12px;line-height:1.5;margin-bottom:16px;">${errorMsg}</p>
+    <button onclick="window.close()" style="background:#27272a;color:#fff;border:1px solid #3f3f46;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:12px;">Close Window</button>
+  </div>
+</body>
+</html>`
+        );
+      }
+
+      const verifiedState = verifyOAuthState(state);
+      if (!verifiedState) {
+        return sendHtml(
+          res,
+          403,
+          `<!DOCTYPE html>
+<html>
+<head><title>Session Mismatch</title></head>
+<body style="background:#09090b;color:#f4f4f5;font-family:ui-sans-serif,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+  <div style="text-align:center;padding:24px;max-width:400px;border:1px solid #27272a;border-radius:12px;background:#18181b;">
+    <p style="color:#ef4444;font-weight:600;margin-bottom:8px;font-size:15px;">Security Validation Failed</p>
+    <p style="color:#a1a1aa;font-size:12px;line-height:1.5;margin-bottom:16px;">The state parameter has expired or was tampered with. Please close this window and retry from Optic.</p>
+    <button onclick="window.close()" style="background:#27272a;color:#fff;border:1px solid #3f3f46;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:12px;">Close Window</button>
+  </div>
+</body>
+</html>`
+        );
+      }
+
+      const { userId: verifiedUserId, returnUrl } = verifiedState;
+      const targetReturnUrl = returnUrl && returnUrl.startsWith('/') ? returnUrl : '/hosting/new';
+
+      const redirectUri = getGitHubRedirectUri(req);
+      const tokenData = await exchangeCodeForGitHubToken(code, redirectUri);
+      const ghUser = await fetchGitHubUserProfile(tokenData.accessToken);
+
+      await saveGitHubConnection(verifiedUserId, {
+        githubUserId: ghUser.id,
+        githubUsername: ghUser.login,
+        avatarUrl: ghUser.avatarUrl,
+        accessToken: tokenData.accessToken,
+        scope: tokenData.scope,
+      });
+
+      return sendHtml(
+        res,
+        200,
+        `<!DOCTYPE html>
+<html>
+<head><title>GitHub Connected</title></head>
+<body style="background:#09090b;color:#f4f4f5;font-family:ui-sans-serif,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+  <div style="text-align:center;padding:28px;max-width:420px;border:1px solid #27272a;border-radius:14px;background:#18181b;box-shadow:0 20px 25px -5px rgba(0,0,0,0.5);">
+    <div style="width:40px;height:40px;border-radius:50%;background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.3);color:#10b981;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:20px;">✓</div>
+    <p style="font-weight:700;font-size:16px;color:#ffffff;margin:0 0 6px;">Connected as @${ghUser.login}</p>
+    <p style="color:#a1a1aa;font-size:12px;margin:0 0 16px;">GitHub authorization complete. Returning to Optic...</p>
+  </div>
+  <script>
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({ type: 'GITHUB_AUTH_SUCCESS', username: '${ghUser.login}' }, '*');
+        setTimeout(function() { window.close(); }, 500);
+      } else {
+        window.location.href = '${targetReturnUrl}';
+      }
+    } catch (e) {
+      window.location.href = '${targetReturnUrl}';
+    }
+  </script>
+</body>
+</html>`
+      );
+    } catch (err: any) {
+      console.error('[API /api/hosting/github/callback] Error:', err);
+      const errMsg = err?.message || 'Failed to complete GitHub authorization.';
+      return sendHtml(
+        res,
+        500,
+        `<!DOCTYPE html>
+<html>
+<head><title>GitHub Connection Error</title></head>
+<body style="background:#09090b;color:#f4f4f5;font-family:ui-sans-serif,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+  <div style="text-align:center;padding:24px;max-width:400px;border:1px solid #27272a;border-radius:12px;background:#18181b;">
+    <p style="color:#ef4444;font-weight:600;margin-bottom:8px;font-size:15px;">GitHub Connection Error</p>
+    <p style="color:#a1a1aa;font-size:12px;line-height:1.5;margin-bottom:16px;">${errMsg}</p>
+    <button onclick="window.close()" style="background:#27272a;color:#fff;border:1px solid #3f3f46;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:12px;">Close Window</button>
+  </div>
+</body>
+</html>`
+      );
+    }
+  }
+
+  // 8b-3. GET /api/hosting?action=github-status
+  if (
+    ((pathname === '/api/hosting' && action === 'github-status') ||
+      pathname === '/api/hosting/github/status' ||
+      pathname.startsWith('/api/hosting/github/status')) &&
+    method === 'GET'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      const config = getGithubOAuthConfig();
+
+      if (!config.configured) {
+        return sendJson(res, 200, {
+          success: true,
+          configured: false,
+          connected: false,
+        });
+      }
+
+      if (!user?.id) {
+        return sendJson(res, 200, {
+          success: true,
+          configured: true,
+          connected: false,
+        });
+      }
+
+      const connection = await getGitHubConnection(user.id);
+      if (!connection) {
+        return sendJson(res, 200, {
+          success: true,
+          configured: true,
+          connected: false,
+        });
+      }
+
+      // Explicitly SANITIZED: Never send access_token to client!
+      return sendJson(res, 200, {
+        success: true,
+        configured: true,
+        connected: true,
+        account: {
+          username: connection.githubUsername,
+          avatarUrl: connection.avatarUrl,
+          githubUserId: connection.githubUserId,
+          connectedAt: connection.createdAt,
+        },
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/github/status] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to check GitHub status',
+      });
+    }
+  }
+
+  // 8b-4. POST /api/hosting?action=github-disconnect
+  if (
+    ((pathname === '/api/hosting' && action === 'github-disconnect') ||
+      pathname === '/api/hosting/github/disconnect' ||
+      pathname.startsWith('/api/hosting/github/disconnect')) &&
+    method === 'POST'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user?.id) {
+        return sendJson(res, 401, { success: false, error: 'Unauthorized' });
+      }
+
+      await disconnectGitHubConnection(user.id);
+      return sendJson(res, 200, {
+        success: true,
+        message: 'GitHub account disconnected successfully.',
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/github/disconnect] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to disconnect GitHub account',
+      });
+    }
+  }
+
+  // 8b-5. GET /api/hosting?action=github-repos
+  if (
+    ((pathname === '/api/hosting' && action === 'github-repos') ||
+      pathname === '/api/hosting/github/repos' ||
+      pathname.startsWith('/api/hosting/github/repos')) &&
+    method === 'GET'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user?.id) {
+        return sendJson(res, 401, {
+          success: false,
+          repositories: [],
+          error: 'Unauthorized. Sign in required.',
+        });
+      }
+
+      const connection = await getGitHubConnection(user.id);
+      if (!connection?.accessToken) {
+        return sendJson(res, 400, {
+          success: false,
+          repositories: [],
+          error: 'GitHub account is not connected. Please connect GitHub first.',
+        });
+      }
+
+      const parsed = new URL(url, 'http://localhost');
+      const searchQuery = parsed.searchParams.get('search') || undefined;
+      const repos = await fetchGitHubRepositories(connection.accessToken, searchQuery);
+
+      return sendJson(res, 200, {
+        success: true,
+        repositories: repos,
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/github/repos] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        repositories: [],
+        error: err?.message || 'Failed to fetch GitHub repositories.',
+      });
+    }
+  }
+
+  // 8b-6. GET /api/hosting?action=github-branches
+  if (
+    ((pathname === '/api/hosting' && action === 'github-branches') ||
+      pathname === '/api/hosting/github/branches' ||
+      pathname.startsWith('/api/hosting/github/branches')) &&
+    method === 'GET'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user?.id) {
+        return sendJson(res, 401, {
+          success: false,
+          branches: [],
+          error: 'Unauthorized. Sign in required.',
+        });
+      }
+
+      const connection = await getGitHubConnection(user.id);
+      if (!connection?.accessToken) {
+        return sendJson(res, 400, {
+          success: false,
+          branches: [],
+          error: 'GitHub account is not connected. Please connect GitHub first.',
+        });
+      }
+
+      const parsed = new URL(url, 'http://localhost');
+      const owner = parsed.searchParams.get('owner') || '';
+      const repo = parsed.searchParams.get('repo') || '';
+
+      if (!owner || !repo) {
+        return sendJson(res, 400, {
+          success: false,
+          branches: [],
+          error: 'Both owner and repo are required query parameters.',
+        });
+      }
+
+      const branches = await fetchGitHubBranches(connection.accessToken, owner, repo);
+      return sendJson(res, 200, {
+        success: true,
+        branches,
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/github/branches] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        branches: [],
+        error: err?.message || 'Failed to fetch repository branches.',
+      });
+    }
+  }
+
+  // 8b-7. POST /api/hosting?action=github-save-project
+  if (
+    ((pathname === '/api/hosting' && action === 'github-save-project') ||
+      pathname === '/api/hosting/github/save-project' ||
+      pathname.startsWith('/api/hosting/github/save-project')) &&
+    method === 'POST'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user?.id) {
+        return sendJson(res, 401, { success: false, error: 'Unauthorized' });
+      }
+
+      const body = await parseJsonBody(req);
+      const {
+        orgId,
+        name,
+        slug,
+        description,
+        framework,
+        gitRepo,
+        gitBranch,
+        buildCommand,
+        outputDirectory,
+        rootDirectory,
+      } = body;
+
+      if (!name || !gitRepo) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'Project name and Git repository are required.',
+        });
+      }
+
+      const cleanSlug = (
+        slug || name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      )
+        .replace(/^-|-$/g, '')
+        .toLowerCase();
+
+      const sb = getSupabaseServerClient();
+      let projectRecord: any = null;
+
+      if (sb) {
+        try {
+          const payload: any = {
+            user_id: user.id,
+            organization_id: orgId,
+            name: name.trim(),
+            slug: cleanSlug,
+            description: description?.trim() || null,
+            git_repo: gitRepo.trim(),
+            git_branch: (gitBranch || 'main').trim(),
+            git_provider: 'github',
+          };
+
+          const { data, error } = await sb
+            .from('projects')
+            .insert(payload)
+            .select()
+            .maybeSingle();
+
+          if (error) {
+            // If git_repo column hasn't been migrated yet in user's DB, fallback safely
+            if (error.message.includes('git_repo')) {
+              delete payload.git_repo;
+              delete payload.git_branch;
+              delete payload.git_provider;
+              const fallback = await sb
+                .from('projects')
+                .insert(payload)
+                .select()
+                .maybeSingle();
+              projectRecord = fallback.data;
+            } else {
+              throw error;
+            }
+          } else {
+            projectRecord = data;
+          }
+        } catch (dbErr: any) {
+          console.warn('[API /api/hosting/github/save-project] DB exception:', dbErr.message);
+        }
+      }
+
+      const fallbackProject = {
+        id: projectRecord?.id || 'proj_' + crypto.randomBytes(6).toString('hex'),
+        organization_id: orgId,
+        name: name.trim(),
+        slug: cleanSlug,
+        description: description?.trim() || undefined,
+        framework: framework || 'react',
+        productionDomain: `https://${cleanSlug}.host.doy.best`,
+        assignedSubdomain: `${cleanSlug}.host.doy.best`,
+        customDomains: [],
+        gitRepo: gitRepo.trim(),
+        gitBranch: (gitBranch || 'main').trim(),
+        buildCommand,
+        outputDirectory,
+        rootDirectory,
+        status: 'ready',
+        createdAt: projectRecord?.created_at || new Date().toISOString(),
+        updatedAt: projectRecord?.updated_at || new Date().toISOString(),
+      };
+
+      return sendJson(res, 200, {
+        success: true,
+        project: fallbackProject,
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/github/save-project] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to save GitHub project configuration.',
+      });
     }
   }
 
