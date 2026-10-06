@@ -519,6 +519,95 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
     }
   };
 
+  // Handler: Start GitHub Deploy
+  const handleStartGitHubDeploy = async () => {
+    if (!selectedProject || !currentOrg) return;
+    setIsDeploying(true);
+    setDeployError(null);
+    setDeployStepText('Connecting to GitHub API...');
+    setDeployProgressPercent(10);
+    setDeployLiveLogs([]);
+
+    const deploymentId =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : 'dep_' + Math.random().toString(36).substring(2, 10);
+
+    const addLocalLog = (message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') => {
+      const newLog: DeploymentLog = {
+        id: `live-${Date.now()}-${Math.random()}`,
+        deploymentId,
+        timestamp: new Date().toLocaleTimeString(),
+        level,
+        message,
+      };
+      setDeployLiveLogs((prev) => [...prev, newLog]);
+      supabaseData.addDeploymentLog(deploymentId, message, level).catch(() => {});
+    };
+
+    try {
+      addLocalLog(`Starting deployment from GitHub (${selectedProject.gitRepo}@${selectedProject.gitBranch || 'main'})`, 'info');
+      setDeployStepText('Fetching entire repository recursively from GitHub...');
+      setDeployProgressPercent(30);
+
+      const token = await storageService.getAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/hosting?action=github-deploy', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          projectId: selectedProject.id,
+          organizationId: currentOrg.id,
+          branch: selectedProject.gitBranch || 'main',
+          projectSlug: selectedProject.slug,
+          owner: selectedProject.gitOwner,
+          repo: selectedProject.gitRepoName,
+          deploymentNote: deploymentNote.trim() || `GitHub Deploy (${selectedProject.gitBranch || 'main'})`,
+        }),
+      });
+
+      setDeployStepText('Uploading & storing repository files to private R2 storage...');
+      setDeployProgressPercent(75);
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to deploy from GitHub');
+      }
+
+      addLocalLog(`Successfully stored ${data.fileCount} repository file(s) in edge storage`, 'info');
+      setDeployStepText('Deployment READY on edge network!');
+      setDeployProgressPercent(100);
+
+      if (data.deploymentId) {
+        setProductionDeploymentId(data.deploymentId);
+        setSelectedDeploymentForLogs(data.deploymentId);
+      }
+
+      addLocalLog(`Deployment is live in production on ${selectedProject.slug}.host.doy.best`, 'success');
+
+      await loadProjectDetails();
+      await fetchProjects();
+
+      toast.success(
+        `Deployed ${data.fileCount} file(s) from GitHub for ${selectedProject.name}.`,
+        'Deployment Ready'
+      );
+
+      setTimeout(() => {
+        setIsDeploying(false);
+        setDeployModalOpen(false);
+        setDeploymentNote('');
+      }, 1000);
+    } catch (err: any) {
+      console.error('GitHub deploy error:', err);
+      setDeployError(err?.message || 'Deployment failed. Check GitHub connection and network.');
+      addLocalLog(err?.message || 'Deployment error', 'error');
+      setIsDeploying(false);
+    }
+  };
+
   // Handler: Delete Project
   const handleDeleteProject = async () => {
     if (!selectedProject || !currentOrg) return;
@@ -726,6 +815,19 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
               >
                 Visit
               </Button>
+              {selectedProject.gitRepo && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={handleStartGitHubDeploy}
+                  loading={isDeploying}
+                  disabled={isDeploying}
+                  icon={<GitBranch size={13} />}
+                  className="bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold"
+                >
+                  Deploy {selectedProject.gitBranch || 'main'}
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
@@ -736,7 +838,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
                 }}
                 icon={<Upload size={13} />}
               >
-                Deploy
+                Upload Files
               </Button>
             </div>
           </div>
@@ -1367,6 +1469,41 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
           maxWidth="lg"
         >
           <div className="space-y-4">
+            {/* GitHub Deploy Section if connected */}
+            {selectedProject?.gitRepo && (
+              <div className="p-4 rounded-xl border border-emerald-900/60 bg-emerald-950/20 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-lg bg-emerald-900/40 border border-emerald-800 text-emerald-400">
+                      <GitBranch size={16} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-100">
+                        Deploy from GitHub
+                      </div>
+                      <div className="text-[11px] font-mono text-emerald-400">
+                        {selectedProject.gitRepo} ({selectedProject.gitBranch || 'main'})
+                      </div>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={handleStartGitHubDeploy}
+                    loading={isDeploying}
+                    disabled={isDeploying}
+                    icon={<GitBranch size={13} />}
+                    className="bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-xs"
+                  >
+                    Deploy Branch
+                  </Button>
+                </div>
+                <p className="text-[11px] text-zinc-400">
+                  Fetches the entire repository recursively, preserves all directory paths and nested assets, and promotes to production.
+                </p>
+              </div>
+            )}
+
             {/* Drag & Drop Box */}
             <div
               onDragOver={(e) => e.preventDefault()}

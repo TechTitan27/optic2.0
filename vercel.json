@@ -122,14 +122,24 @@
       "destination": "/api/domains"
     },
     {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "(?<project>[^.]+)\\.host\\.(?<domain>.*)"
+        }
+      ],
+      "destination": "/api/deployments?project=:project&subpath="
+    },
+    {
       "source": "/:path*",
       "has": [
         {
           "type": "host",
-          "value": "(.*)\\.host\\.(.*)"
+          "value": "(?<project>[^.]+)\\.host\\.(?<domain>.*)"
         }
       ],
-      "destination": "/api/deployments"
+      "destination": "/api/deployments?project=:project&subpath=:path*"
     },
     {
       "source": "/",

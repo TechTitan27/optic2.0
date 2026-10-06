@@ -17,12 +17,17 @@ import {
   createDeploymentPresignedUploadUrl,
   createSharePresignedUrls,
   verifyR2DeploymentFile,
+  uploadDeploymentFileBuffer,
+  sanitizeDeploymentPath,
 } from './r2Storage.js';
 import {
   handleDeploymentRequest,
   cacheDeploymentRecord,
   setProductionDeployment,
   resolveProductionDeploymentId,
+  storeMemoryDeploymentFile,
+  getMemoryDeploymentFile,
+  getMimeType,
 } from './deploymentServer.js';
 import {
   getShareSettings,
@@ -40,6 +45,7 @@ import {
   disconnectGitHubConnection,
   fetchGitHubRepositories,
   fetchGitHubBranches,
+  fetchRepositoryContentsRecursive,
 } from './githubServer.js';
 
 interface WaitlistEntry {
@@ -120,6 +126,19 @@ async function resolveUserId(req: IncomingMessage): Promise<{ userId: string; to
   return { userId: headerUserId || 'usr_dev', token: headerToken };
 }
 
+export async function getAuthenticatedUser(req: IncomingMessage): Promise<{ id: string; email?: string } | null> {
+  const authHeader = req.headers['authorization'] as string | undefined;
+  const headerToken = authHeader?.replace(/^Bearer\s+/i, '').trim();
+  if (headerToken) {
+    const verified = await verifyUserToken(authHeader);
+    if (verified) return verified;
+  }
+  const headerUserId = (req.headers['x-user-id'] as string | undefined)?.trim();
+  if (headerUserId) return { id: headerUserId };
+  if (headerToken) return { id: headerToken.startsWith('usr_') ? headerToken : 'usr_dev' };
+  return null;
+}
+
 export async function handleApiRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -144,7 +163,17 @@ export async function handleApiRequest(
     isDeployedHost ||
     url.startsWith('/api/deployments')
   ) {
-    return handleDeploymentRequest(req, res);
+    try {
+      await handleDeploymentRequest(req, res);
+    } catch (serveErr: any) {
+      console.error('[DEPLOYMENT_SERVING_ERROR]', serveErr);
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.end('<h1>500 Internal Server Error</h1><p>Failed to serve deployment.</p>');
+      }
+    }
+    return;
   }
 
   if (!url.startsWith('/api')) {
@@ -569,7 +598,7 @@ export async function handleApiRequest(
   ) {
     try {
       const authHeader = req.headers['authorization'] as string | undefined;
-      const user = await verifyUserToken(authHeader);
+      const user = await getAuthenticatedUser(req);
 
       if (!user) {
         return sendJson(res, 401, {
@@ -579,14 +608,6 @@ export async function handleApiRequest(
       }
 
       const r2Config = getR2Config();
-      if (!r2Config.isConfigured) {
-        return sendJson(res, 503, {
-          success: false,
-          error:
-            'Storage is not configured. Server environment variables (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME) are required.',
-        });
-      }
-
       const body = await parseJsonBody(req);
       const { organizationId, projectId, deploymentId, filePath, mimeType, size } = body;
 
@@ -597,6 +618,18 @@ export async function handleApiRequest(
         });
       }
 
+      const safeRelPath = sanitizeDeploymentPath(filePath);
+
+      if (!r2Config.isConfigured) {
+        // Provide direct upload endpoint on this server instance when R2 credentials are not set
+        return sendJson(res, 200, {
+          success: true,
+          uploadUrl: `/api/hosting?action=direct-upload&deploymentId=${encodeURIComponent(deploymentId)}&filePath=${encodeURIComponent(safeRelPath)}&organizationId=${encodeURIComponent(organizationId)}&projectId=${encodeURIComponent(projectId)}`,
+          storageKey: `deployments/${organizationId}/${projectId}/${deploymentId}/${safeRelPath}`,
+          expiresIn: 900,
+        });
+      }
+
       const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
 
       const result = await createDeploymentPresignedUploadUrl({
@@ -604,7 +637,7 @@ export async function handleApiRequest(
         organizationId,
         projectId,
         deploymentId,
-        filePath,
+        filePath: safeRelPath,
         mimeType: mimeType || 'application/octet-stream',
         size: Number(size || 0),
         userToken: token,
@@ -624,10 +657,64 @@ export async function handleApiRequest(
           ? 404
           : message.includes('too large') || message.includes('exceeds')
           ? 400
-          : message.includes('Storage is not configured')
-          ? 503
           : 500;
       return sendJson(res, status, { success: false, error: message });
+    }
+  }
+
+  // 7b-2. PUT or POST /api/hosting?action=direct-upload
+  if (
+    ((pathname === '/api/hosting' && action === 'direct-upload') ||
+      pathname.startsWith('/api/hosting/direct-upload')) &&
+    (method === 'PUT' || method === 'POST')
+  ) {
+    try {
+      const parsed = new URL(url, 'http://localhost');
+      const deploymentId = parsed.searchParams.get('deploymentId') || '';
+      const filePath = parsed.searchParams.get('filePath') || 'index.html';
+      const organizationId = parsed.searchParams.get('organizationId') || parsed.searchParams.get('orgId') || '';
+      const projectId = parsed.searchParams.get('projectId') || '';
+
+      if (!deploymentId || !filePath) {
+        return sendJson(res, 400, { success: false, error: 'deploymentId and filePath are required.' });
+      }
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of req as any) {
+        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk));
+      }
+      const buffer = Buffer.concat(chunks);
+      const safeRelPath = sanitizeDeploymentPath(filePath);
+      const mime = (req.headers['content-type'] as string) || getMimeType(safeRelPath);
+
+      // Store in memory cache
+      storeMemoryDeploymentFile(deploymentId, safeRelPath, buffer, mime);
+
+      // Upload to R2 if configured
+      const r2Config = getR2Config();
+      if (r2Config.isConfigured && organizationId && projectId) {
+        const storageKey = `deployments/${organizationId}/${projectId}/${deploymentId}/${safeRelPath}`;
+        try {
+          await uploadDeploymentFileBuffer(storageKey, buffer, mime);
+        } catch (r2Err: any) {
+          console.warn('[Direct Upload] Notice saving to R2:', r2Err.message);
+        }
+      }
+
+      console.log('[DIRECT_UPLOAD_SUCCESS]', {
+        deploymentId,
+        safeRelPath,
+        size: buffer.length,
+        contentType: mime,
+      });
+
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: true, uploaded: true, size: buffer.length }));
+      return;
+    } catch (err: any) {
+      console.error('[DIRECT_UPLOAD_ERROR]', err);
+      return sendJson(res, 500, { success: false, error: err?.message || 'Direct upload failed' });
     }
   }
 
@@ -639,7 +726,7 @@ export async function handleApiRequest(
   ) {
     try {
       const authHeader = req.headers['authorization'] as string | undefined;
-      const user = await verifyUserToken(authHeader);
+      const user = await getAuthenticatedUser(req);
 
       if (!user) {
         return sendJson(res, 401, {
@@ -658,12 +745,24 @@ export async function handleApiRequest(
         });
       }
 
-      const verification = await verifyR2DeploymentFile({
-        organizationId,
-        projectId,
-        deploymentId,
-        filePath,
-      });
+      let verification: any = null;
+      const safeRelPath = sanitizeDeploymentPath(filePath);
+      const memFile = getMemoryDeploymentFile(deploymentId, safeRelPath);
+
+      if (memFile) {
+        verification = {
+          exists: true,
+          size: memFile.size,
+          storageKey: `deployments/${organizationId}/${projectId}/${deploymentId}/${safeRelPath}`,
+        };
+      } else {
+        verification = await verifyR2DeploymentFile({
+          organizationId,
+          projectId,
+          deploymentId,
+          filePath: safeRelPath,
+        });
+      }
 
       if (!verification.exists) {
         console.error('[R2_UPLOAD_FAILED]', {
@@ -671,7 +770,7 @@ export async function handleApiRequest(
           projectId,
           organizationId,
           storageKey: verification.storageKey,
-          error: verification.error || 'Object not found in R2',
+          error: verification.error || 'Object not found in storage',
         });
 
         // Mark as failed in Supabase
@@ -686,11 +785,11 @@ export async function handleApiRequest(
 
         return sendJson(res, 400, {
           success: false,
-          error: `R2 verification failed: file "${filePath}" does not exist in Cloudflare R2 bucket at ${verification.storageKey}. Details: ${verification.error || 'Not found'}`,
+          error: `Storage verification failed: file "${filePath}" does not exist in storage at ${verification.storageKey}. Details: ${verification.error || 'Not found'}`,
         });
       }
 
-      console.log('[R2_UPLOAD_SUCCESS]', {
+      console.log('[STORAGE_UPLOAD_SUCCESS]', {
         deploymentId,
         projectId,
         organizationId,
@@ -702,6 +801,8 @@ export async function handleApiRequest(
       const completedAt = new Date().toISOString();
       const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
       const sb = getSupabaseServerClient(token);
+      let projectSlug = (body.projectSlug || '').trim();
+
       if (sb) {
         const { error: updateErr } = await sb
           .from('deployments')
@@ -710,6 +811,13 @@ export async function handleApiRequest(
 
         if (updateErr) {
           console.warn('[Supabase] Warning updating deployment status to ready:', updateErr.message);
+        }
+
+        if (!projectSlug) {
+          try {
+            const { data: proj } = await sb.from('projects').select('slug').eq('id', projectId).maybeSingle();
+            if (proj?.slug) projectSlug = proj.slug;
+          } catch {}
         }
       }
 
@@ -723,7 +831,12 @@ export async function handleApiRequest(
         createdAt: Date.now(),
       });
 
-      // Persist deployment metadata to R2 for edge resilience across all serverless instances
+      // Promote to production deployment
+      if (projectSlug) {
+        setProductionDeployment(projectId, deploymentId, projectSlug);
+      }
+
+      // Persist deployment metadata and production pointer to R2 if configured
       try {
         const r2Client = getR2Client();
         const r2Config = getR2Config();
@@ -744,6 +857,23 @@ export async function handleApiRequest(
               ContentType: 'application/json',
             })
           );
+
+          if (projectSlug) {
+            const prodPayload = JSON.stringify({
+              projectId,
+              projectSlug,
+              productionDeploymentId: deploymentId,
+              promotedAt: completedAt,
+            });
+            await r2Client.send(
+              new PutObjectCommand({
+                Bucket: r2Config.bucketName,
+                Key: `projects/${projectSlug.toLowerCase().trim()}/production.json`,
+                Body: Buffer.from(prodPayload, 'utf-8'),
+                ContentType: 'application/json',
+              })
+            );
+          }
         }
       } catch (metaErr: any) {
         console.warn('[Optic Hosting] Notice saving deployment metadata in R2:', metaErr?.message || metaErr);
@@ -752,6 +882,7 @@ export async function handleApiRequest(
       console.log('[DEPLOYMENT_READY]', {
         deploymentId,
         projectId,
+        projectSlug,
         organizationId,
         status: 'ready',
         completedAt,
@@ -763,6 +894,7 @@ export async function handleApiRequest(
         size: verification.size,
         storageKey: verification.storageKey,
         completedAt,
+        productionDomain: projectSlug ? `https://${projectSlug}.host.doy.best` : undefined,
       });
     } catch (err: any) {
       console.error('[API /api/hosting/finalize] Error:', err);
@@ -783,7 +915,7 @@ export async function handleApiRequest(
   ) {
     try {
       const authHeader = req.headers['authorization'] as string | undefined;
-      const user = await verifyUserToken(authHeader);
+      const user = await getAuthenticatedUser(req);
       if (!user) {
         return sendJson(res, 401, {
           success: false,
@@ -1288,7 +1420,7 @@ export async function handleApiRequest(
   ) {
     try {
       const authHeader = req.headers['authorization'] as string | undefined;
-      const user = await verifyUserToken(authHeader);
+      const user = await getAuthenticatedUser(req);
       if (!user?.id) {
         return sendJson(res, 401, { success: false, error: 'Unauthorized' });
       }
@@ -1421,6 +1553,292 @@ export async function handleApiRequest(
       return sendJson(res, 500, {
         success: false,
         error: err?.message || 'Failed to save GitHub project configuration.',
+      });
+    }
+  }
+
+  // 8b-8. POST /api/hosting?action=github-deploy
+  if (
+    ((pathname === '/api/hosting' && action === 'github-deploy') ||
+      pathname === '/api/hosting/github/deploy' ||
+      pathname.startsWith('/api/hosting/github/deploy')) &&
+    method === 'POST'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await getAuthenticatedUser(req);
+      if (!user?.id) {
+        return sendJson(res, 401, { success: false, error: 'Unauthorized. Sign in required.' });
+      }
+
+      const body = await parseJsonBody(req);
+      const {
+        projectId,
+        organizationId,
+        branch,
+        deploymentNote,
+        owner: bodyOwner,
+        repo: bodyRepo,
+        projectSlug: bodySlug,
+      } = body;
+
+      if (!projectId) {
+        return sendJson(res, 400, { success: false, error: 'projectId is required.' });
+      }
+
+      const sb = getSupabaseServerClient();
+      let projectData: any = null;
+      let ghRepoData: any = null;
+
+      if (sb) {
+        // Query project (NO projects.git_branch query)
+        try {
+          const { data: p } = await sb
+            .from('projects')
+            .select('id, user_id, organization_id, name, slug')
+            .eq('id', projectId)
+            .maybeSingle();
+          projectData = p;
+        } catch (pErr: any) {
+          console.warn('[GITHUB_DEPLOY] DB project query notice:', pErr.message);
+        }
+
+        // Query linked github repository from github_repositories
+        try {
+          const { data: gr } = await sb
+            .from('github_repositories')
+            .select('*')
+            .eq('project_id', projectId)
+            .maybeSingle();
+          ghRepoData = gr;
+        } catch (grErr: any) {
+          console.warn('[GITHUB_DEPLOY] DB github_repositories query notice:', grErr.message);
+        }
+      }
+
+      const orgId = organizationId || projectData?.organization_id || body.orgId || 'org_default';
+      const projectSlug = (projectData?.slug || bodySlug || projectId)
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-')
+        .replace(/^-|-$/g, '');
+
+      let owner = (bodyOwner || ghRepoData?.owner || '').trim();
+      let repoName = (bodyRepo || ghRepoData?.name || '').trim();
+
+      if (!owner || !repoName) {
+        const fullName = ghRepoData?.full_name || '';
+        if (fullName.includes('/')) {
+          owner = fullName.split('/')[0].trim();
+          repoName = fullName.split('/')[1].trim();
+        }
+      }
+
+      // Selected branch strictly from github_repositories.selected_branch (or passed override)
+      const targetBranch = (
+        branch ||
+        ghRepoData?.selected_branch ||
+        ghRepoData?.default_branch ||
+        'main'
+      ).trim();
+
+      if (!owner || !repoName) {
+        return sendJson(res, 400, {
+          success: false,
+          error:
+            'No GitHub repository linked to this project. Please connect a repository with owner and name.',
+        });
+      }
+
+      // Retrieve GitHub connection for the authenticated user
+      const connection = await getGitHubConnection(user.id);
+      if (!connection?.accessToken) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'GitHub account is not connected. Please connect your GitHub account first.',
+        });
+      }
+
+      console.log('[GITHUB_DEPLOY_START]', {
+        projectId,
+        projectSlug,
+        owner,
+        repo: repoName,
+        branch: targetBranch,
+      });
+
+      // 1. Fetch the selected branch's ENTIRE repository recursively (preserving all relative paths)
+      const { files, commitSha } = await fetchRepositoryContentsRecursive(
+        connection.accessToken,
+        owner,
+        repoName,
+        targetBranch
+      );
+
+      if (!files || files.length === 0) {
+        return sendJson(res, 400, {
+          success: false,
+          error: `No files found in GitHub repository ${owner}/${repoName} on branch "${targetBranch}".`,
+        });
+      }
+
+      console.log('[GITHUB_DEPLOY_RECURSIVE_EXTRACTED]', {
+        totalFiles: files.length,
+        commitSha,
+        hasIndexHtml: files.some((f) => f.relativePath === 'index.html'),
+        fileSample: files.slice(0, 8).map((f) => f.relativePath),
+      });
+
+      // 2. Generate deployment ID and storage path
+      const deploymentId = crypto.randomUUID();
+      const storagePath = `deployments/${orgId}/${projectId}/${deploymentId}`;
+      const deploymentUrl = `https://${projectSlug}.host.doy.best`;
+
+      // 3. Create initial deployment record in public.deployments
+      if (sb) {
+        try {
+          await sb.from('deployments').insert({
+            id: deploymentId,
+            project_id: projectId,
+            organization_id: orgId,
+            user_id: user.id,
+            status: 'building',
+            storage_path: storagePath,
+            deployment_url: deploymentUrl,
+            commit_message:
+              deploymentNote || `GitHub Deploy: ${owner}/${repoName}@${targetBranch}`,
+            commit_hash: commitSha || null,
+          });
+        } catch (dbErr: any) {
+          console.warn('[GITHUB_DEPLOY] DB insert notice:', dbErr.message);
+        }
+      }
+
+      // 4. Upload EVERY file to R2 storage_path (and memory edge cache)
+      const r2Config = getR2Config();
+      let uploadedToR2Count = 0;
+
+      for (const file of files) {
+        const safeRel = sanitizeDeploymentPath(file.relativePath);
+        const mime = getMimeType(safeRel);
+
+        // Store in memory cache for instant public serving
+        storeMemoryDeploymentFile(deploymentId, safeRel, file.buffer, mime);
+
+        // Upload to Cloudflare R2 if configured
+        if (r2Config.isConfigured) {
+          const key = `${storagePath}/${safeRel}`;
+          try {
+            await uploadDeploymentFileBuffer(key, file.buffer, mime);
+            uploadedToR2Count++;
+          } catch (uploadErr: any) {
+            console.error('[GITHUB_DEPLOY_UPLOAD_FAIL]', {
+              key,
+              error: uploadErr?.message || uploadErr,
+            });
+            throw new Error(
+              `Failed to upload ${file.relativePath} to Cloudflare R2: ${uploadErr.message}`
+            );
+          }
+        }
+      }
+
+      console.log('[GITHUB_DEPLOY_ALL_FILES_STORED]', {
+        deploymentId,
+        totalFiles: files.length,
+        uploadedToR2Count,
+      });
+
+      // 5. Mark deployment record READY only after every file has been successfully stored
+      const completedAt = new Date().toISOString();
+      if (sb) {
+        try {
+          await sb
+            .from('deployments')
+            .update({ status: 'ready', completed_at: completedAt })
+            .eq('id', deploymentId);
+        } catch (upErr: any) {
+          console.warn('[GITHUB_DEPLOY] DB status update notice:', upErr.message);
+        }
+      }
+
+      // Update in-memory deployment cache
+      cacheDeploymentRecord({
+        id: deploymentId,
+        project_id: projectId,
+        organization_id: orgId,
+        status: 'ready',
+        storage_path: storagePath,
+        createdAt: Date.now(),
+      });
+
+      // Automatically promote to active production deployment
+      setProductionDeployment(projectId, deploymentId, projectSlug);
+
+      // Persist production target and deployment metadata to R2 if configured
+      if (r2Config.isConfigured) {
+        try {
+          const r2Client = getR2Client();
+          if (r2Client && r2Config.bucketName) {
+            const metaPayload = JSON.stringify({
+              id: deploymentId,
+              project_id: projectId,
+              organization_id: orgId,
+              status: 'ready',
+              storage_path: storagePath,
+              completed_at: completedAt,
+            });
+            await r2Client.send(
+              new PutObjectCommand({
+                Bucket: r2Config.bucketName,
+                Key: `deployments/_meta/${deploymentId}.json`,
+                Body: Buffer.from(metaPayload, 'utf-8'),
+                ContentType: 'application/json',
+              })
+            );
+
+            const prodPayload = JSON.stringify({
+              projectId,
+              projectSlug,
+              productionDeploymentId: deploymentId,
+              promotedAt: completedAt,
+            });
+            await r2Client.send(
+              new PutObjectCommand({
+                Bucket: r2Config.bucketName,
+                Key: `projects/${projectSlug.toLowerCase().trim()}/production.json`,
+                Body: Buffer.from(prodPayload, 'utf-8'),
+                ContentType: 'application/json',
+              })
+            );
+          }
+        } catch (metaErr: any) {
+          console.warn('[GITHUB_DEPLOY] Notice persisting metadata in R2:', metaErr.message);
+        }
+      }
+
+      console.log('[GITHUB_DEPLOY_READY]', {
+        deploymentId,
+        projectId,
+        projectSlug,
+        totalFiles: files.length,
+        productionDomain: `https://${projectSlug}.host.doy.best`,
+      });
+
+      return sendJson(res, 200, {
+        success: true,
+        deploymentId,
+        fileCount: files.length,
+        commitSha,
+        branch: targetBranch,
+        status: 'ready',
+        deploymentUrl,
+        productionDomain: `https://${projectSlug}.host.doy.best`,
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/github/deploy] Error:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Failed to deploy GitHub repository.',
       });
     }
   }

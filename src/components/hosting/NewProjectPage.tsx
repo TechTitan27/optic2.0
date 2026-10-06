@@ -103,7 +103,7 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
   onBackToHosting,
   onProjectCreated,
 }) => {
-  const { user, profile } = useAuth();
+  const { user, profile, accessToken } = useAuth();
   const { currentOrg, organizations, setCurrentOrg } = useOrganization();
   const toast = useToast();
 
@@ -422,10 +422,46 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
           rootDirectory: rootDirectory.trim() || undefined,
         });
 
-        toast.success(
-          `Project "${newProject.name}" connected to ${repoFullName} (${selectedBranch}).`,
-          'GitHub Project Configured'
-        );
+        // Immediately trigger complete GitHub deployment
+        const deployBranch = selectedBranch || selectedRepo.defaultBranch || 'main';
+        try {
+          const token = accessToken;
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+
+          const deployRes = await fetch('/api/hosting?action=github-deploy', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              projectId: newProject.id,
+              organizationId: currentOrg.id,
+              branch: deployBranch,
+              owner: selectedRepo.owner.login,
+              repo: selectedRepo.name,
+              projectSlug: newProject.slug,
+              deploymentNote: `Initial deploy from ${repoFullName}@${deployBranch}`,
+            }),
+          });
+
+          const deployData = await deployRes.json();
+          if (deployData.success) {
+            toast.success(
+              `Deployed ${deployData.fileCount} file(s) from ${repoFullName} (${deployBranch}) to production!`,
+              'Deployment Live'
+            );
+          } else {
+            toast.success(
+              `Project "${newProject.name}" connected to ${repoFullName} (${selectedBranch}).`,
+              'GitHub Project Configured'
+            );
+          }
+        } catch (deployErr: any) {
+          console.warn('[NewProjectPage] Initial deploy background notice:', deployErr.message);
+          toast.success(
+            `Project "${newProject.name}" connected to ${repoFullName} (${selectedBranch}).`,
+            'GitHub Project Configured'
+          );
+        }
       } else {
         // Create manual / static project
         newProject = await supabaseData.createHostingProject(currentOrg.id, {
@@ -1166,7 +1202,7 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                       icon={<GitHubLogoIcon size={14} />}
                       className="bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold px-4 py-2"
                     >
-                      Continue to Deploy
+                      Deploy Project
                     </Button>
                   </div>
                 </form>

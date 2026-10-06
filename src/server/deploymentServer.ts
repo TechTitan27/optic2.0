@@ -158,8 +158,37 @@ export interface CachedDeployment {
   createdAt: number;
 }
 
+export interface MemoryFileEntry {
+  buffer: Buffer;
+  mimeType: string;
+  size: number;
+}
+
 const memoryDeployments = new Map<string, CachedDeployment>();
 const projectProductionMap = new Map<string, string>();
+const memoryDeploymentFiles = new Map<string, MemoryFileEntry>();
+
+export function storeMemoryDeploymentFile(
+  deploymentId: string,
+  relativePath: string,
+  buffer: Buffer,
+  mimeType: string
+) {
+  const safeRelPath = sanitizeDeploymentPath(relativePath);
+  memoryDeploymentFiles.set(`${deploymentId}/${safeRelPath}`, {
+    buffer,
+    mimeType: getMimeType(safeRelPath, mimeType),
+    size: buffer.length,
+  });
+}
+
+export function getMemoryDeploymentFile(
+  deploymentId: string,
+  relativePath: string
+): MemoryFileEntry | undefined {
+  const safeRelPath = sanitizeDeploymentPath(relativePath);
+  return memoryDeploymentFiles.get(`${deploymentId}/${safeRelPath}`);
+}
 
 export function cacheDeploymentRecord(record: CachedDeployment) {
   memoryDeployments.set(record.id, record);
@@ -190,8 +219,20 @@ export async function resolveProductionDeploymentId(
   options?: DeploymentServerOptions
 ): Promise<string | null> {
   const clean = slugOrId.toLowerCase().trim();
+  console.log('[HOSTNAME_RESOLVE_STEP]', {
+    step: 'lookup_production_deployment',
+    target: clean,
+  });
+
   const cached = getProductionDeployment(clean);
-  if (cached) return cached;
+  if (cached) {
+    console.log('[HOSTNAME_RESOLVE_STEP]', {
+      step: 'found_in_memory_map',
+      target: clean,
+      deploymentId: cached,
+    });
+    return cached;
+  }
 
   const r2Client = options?.r2Client || getR2Client();
   const r2Config = options?.r2Config || getR2Config();
@@ -215,6 +256,11 @@ export async function resolveProductionDeploymentId(
         if (text) {
           const parsed = JSON.parse(text);
           if (parsed?.productionDeploymentId) {
+            console.log('[HOSTNAME_RESOLVE_STEP]', {
+              step: 'found_in_r2_pointer',
+              target: clean,
+              deploymentId: parsed.productionDeploymentId,
+            });
             setProductionDeployment(parsed.projectId || clean, parsed.productionDeploymentId, clean);
             return parsed.productionDeploymentId;
           }
@@ -229,27 +275,79 @@ export async function resolveProductionDeploymentId(
   const sb = options?.supabase || getSupabaseServerClient();
   if (sb) {
     try {
-      const { data: proj } = await sb
-        .from('projects')
-        .select('id, organization_id, slug')
-        .or(`slug.eq.${clean},id.eq.${clean}`)
-        .maybeSingle();
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean);
+      let query = sb.from('projects').select('id, organization_id, slug, name');
+      if (isUuid) {
+        query = query.or(`slug.eq.${clean},id.eq.${clean}`);
+      } else {
+        query = query.eq('slug', clean);
+      }
+      const { data: proj, error: projErr } = await query.maybeSingle();
+
+      if (projErr) {
+        console.warn('[HOSTNAME_RESOLVE_STEP]', {
+          step: 'supabase_project_query_notice',
+          target: clean,
+          error: projErr.message,
+        });
+      }
 
       if (proj) {
+        console.log('[HOSTNAME_RESOLVE_STEP]', {
+          step: 'found_project_in_supabase',
+          projectId: proj.id,
+          slug: proj.slug,
+          name: proj.name,
+        });
+
         // Query latest ready deployment
-        const { data: dep } = await sb
+        const { data: dep, error: depErr } = await sb
           .from('deployments')
-          .select('id, status')
+          .select('id, status, storage_path, organization_id, project_id')
           .eq('project_id', proj.id)
           .eq('status', 'ready')
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        if (dep?.id) {
-          setProductionDeployment(proj.id, dep.id, proj.slug);
-          return dep.id;
+        if (depErr) {
+          console.warn('[HOSTNAME_RESOLVE_STEP]', {
+            step: 'supabase_deployment_query_notice',
+            projectId: proj.id,
+            error: depErr.message,
+          });
         }
+
+        if (dep?.id) {
+          console.log('[HOSTNAME_RESOLVE_STEP]', {
+            step: 'found_ready_deployment_in_supabase',
+            projectId: proj.id,
+            deploymentId: dep.id,
+          });
+          setProductionDeployment(proj.id, dep.id, proj.slug);
+          cacheDeploymentRecord({
+            id: dep.id,
+            project_id: dep.project_id || proj.id,
+            organization_id: dep.organization_id || proj.organization_id,
+            status: dep.status || 'ready',
+            storage_path:
+              dep.storage_path ||
+              `deployments/${dep.organization_id || proj.organization_id}/${proj.id}/${dep.id}`,
+            createdAt: Date.now(),
+          });
+          return dep.id;
+        } else {
+          console.warn('[HOSTNAME_RESOLVE_STEP]', {
+            step: 'no_ready_deployment_found_in_supabase',
+            projectId: proj.id,
+            slug: proj.slug,
+          });
+        }
+      } else {
+        console.warn('[HOSTNAME_RESOLVE_STEP]', {
+          step: 'project_not_found_in_supabase',
+          target: clean,
+        });
       }
     } catch (err: any) {
       console.warn('[Optic Hosting] Production deployment lookup notice:', err.message);
@@ -264,7 +362,8 @@ export async function resolveProductionDeploymentId(
  * Supports:
  * 1. Host-based project URLs: https://<project-slug>.host.doy.best/ -> project slug -> production deployment
  * 2. Host-based immutable URLs: https://<deployment-id>.host.doy.best/ -> direct deployment ID
- * 3. Public API paths: /api/deployments/:deploymentId/*
+ * 3. Vercel rewrites: /api/deployments?project=:project&subpath=:path*
+ * 4. Public API paths: /api/deployments/:deploymentId/*
  */
 export async function resolveRequestTarget(
   req: IncomingMessage,
@@ -292,16 +391,46 @@ export async function resolveRequestTarget(
     (req.headers['x-vercel-matched-path'] as string) ||
     '';
   const reqUrl = req.url || '';
-  const candidate = (headerUri && headerUri.includes('/api/deployments')) ? headerUri : reqUrl;
+  const candidate = headerUri && headerUri.includes('/api/deployments') ? headerUri : reqUrl;
 
   const parsed = new URL(candidate, 'http://localhost');
   const pathname = parsed.pathname;
 
-  // 1. Host-based wildcard routing check: *.host.doy.best, *.host.optic.doy.best, or *.host.localhost
+  // A. Check for Vercel query-based rewrite: ?project=:project&subpath=:subpath
+  const projectParam = parsed.searchParams.get('project');
+  const subpathParam = parsed.searchParams.get('subpath') ?? '';
+
+  if (projectParam) {
+    const cleanProject = projectParam.toLowerCase().trim();
+    const rawSubpath = subpathParam.replace(/^\/+/, '');
+    console.log('[HOSTNAME_RESOLVE_STEP]', {
+      step: 'vercel_rewrite_query_match',
+      projectParam: cleanProject,
+      rawSubpath,
+      candidate,
+    });
+    const prodDepId = await resolveProductionDeploymentId(cleanProject, options);
+    return {
+      deploymentId: prodDepId || '',
+      rawSubpath,
+      rawUrl: candidate,
+      isHostRouting: true,
+      projectSlug: cleanProject,
+    };
+  }
+
+  // B. Host-based wildcard routing check: *.host.doy.best, *.host.optic.doy.best, or *.host.localhost
   const hostMatch = host.match(/^([a-z0-9_-]+)\.host\.(?:doy\.best|optic\.doy\.best|localhost)$/i);
   if (hostMatch) {
     const subdomain = hostMatch[1].toLowerCase();
     const rawSubpath = pathname.replace(/^\/+/, '');
+
+    console.log('[HOSTNAME_RESOLVE_STEP]', {
+      step: 'wildcard_host_match',
+      host,
+      subdomain,
+      rawSubpath,
+    });
 
     // Is subdomain a deployment ID (UUID or known cached deployment)?
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(subdomain);
@@ -325,7 +454,7 @@ export async function resolveRequestTarget(
     };
   }
 
-  // 2. Standard /api/deployments/:deploymentId/* parsing
+  // C. Standard /api/deployments/:deploymentId/* parsing
   let deploymentId = '';
   let rawSubpath = '';
 
@@ -341,7 +470,6 @@ export async function resolveRequestTarget(
     if (depIdParam) {
       deploymentId = depIdParam;
     }
-    const subpathParam = parsed.searchParams.get('subpath');
     if (subpathParam) {
       rawSubpath = subpathParam;
     }
@@ -351,11 +479,8 @@ export async function resolveRequestTarget(
       deploymentId = parts[0] || '';
       rawSubpath = parts.slice(1).join('/');
     }
-  } else if (!rawSubpath) {
-    const subpathParam = parsed.searchParams.get('subpath');
-    if (subpathParam) {
-      rawSubpath = subpathParam;
-    }
+  } else if (!rawSubpath && subpathParam) {
+    rawSubpath = subpathParam;
   }
 
   return {
@@ -634,20 +759,6 @@ export async function handleDeploymentRequest(
     );
   }
 
-  // 4. Cloudflare R2 Client Check
-  if (!r2Client || !r2Config.bucketName || !r2Config.isConfigured) {
-    console.error('[DEPLOYMENT_SERVE_FAILED]', {
-      deploymentId,
-      reason: 'Cloudflare R2 is not configured on this instance',
-    });
-    return sendHtmlPage(
-      res,
-      503,
-      'Storage Unavailable',
-      'Cloudflare R2 storage credentials are not configured on this Optic instance.'
-    );
-  }
-
   // 5. Resolve Target File Path
   let targetRelative = decodedSubpath.replace(/^\/+/, '');
   if (!targetRelative || targetRelative.endsWith('/')) {
@@ -664,14 +775,77 @@ export async function handleDeploymentRequest(
     : `deployments/${orgId}/${projId}/${depId}/${safeRelPath}`;
 
   // 3. STRUCTURED LOG: DEPLOYMENT_R2_PATH
-  console.log('[DEPLOYMENT_R2_PATH]', {
+  console.log('[DEPLOYMENT_TARGET_PATH]', {
     deploymentId,
     targetRelative,
     safeRelPath,
     storageKey,
   });
 
-  // 6. Stream Object from Cloudflare R2
+  // 5b. Check Memory File Cache First (Instant Edge Serving)
+  const memFile = getMemoryDeploymentFile(deployment.id, safeRelPath);
+  if (memFile) {
+    console.log('[DEPLOYMENT_SERVE_SUCCESS_MEMORY]', {
+      deploymentId,
+      safeRelPath,
+      size: memFile.size,
+      contentType: memFile.mimeType,
+    });
+
+    res.statusCode = 200;
+    res.setHeader('Content-Type', memFile.mimeType);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Length', memFile.size);
+
+    if (safeRelPath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+    }
+
+    if (method === 'HEAD') {
+      res.end();
+      return;
+    }
+
+    res.end(memFile.buffer);
+    return;
+  }
+
+  // 6. Check Cloudflare R2 Client Check
+  if (!r2Client || !r2Config.bucketName || !r2Config.isConfigured) {
+    // If not in memory and R2 not configured: check SPA fallback
+    if (isSpaCandidate(targetRelative)) {
+      const memIndex = getMemoryDeploymentFile(deployment.id, 'index.html');
+      if (memIndex) {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+        res.setHeader('Content-Length', memIndex.size);
+        if (method === 'HEAD') {
+          res.end();
+          return;
+        }
+        res.end(memIndex.buffer);
+        return;
+      }
+    }
+
+    console.error('[DEPLOYMENT_SERVE_FAILED]', {
+      deploymentId,
+      safeRelPath,
+      reason: 'File not found in deployment cache and R2 storage is not configured',
+    });
+    return sendHtmlPage(
+      res,
+      404,
+      'File Not Found',
+      `The requested file "${targetRelative}" does not exist in deployment ${deploymentId}.`
+    );
+  }
+
+  // 7. Stream Object from Cloudflare R2
   try {
     const getCmd = new GetObjectCommand({
       Bucket: r2Config.bucketName,

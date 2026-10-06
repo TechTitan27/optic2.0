@@ -597,3 +597,33 @@ export async function verifyR2DeploymentFile(params: {
     };
   }
 }
+
+/**
+ * Directly upload a file buffer to Cloudflare R2 for a deployment
+ */
+export async function uploadDeploymentFileBuffer(
+  storageKey: string,
+  buffer: Buffer,
+  mimeType: string
+): Promise<boolean> {
+  const config = getR2Config();
+  const client = getR2Client();
+  if (!config.isConfigured || !client || !config.bucketName) {
+    return false;
+  }
+
+  try {
+    await client.send(
+      new PutObjectCommand({
+        Bucket: config.bucketName,
+        Key: storageKey,
+        Body: buffer,
+        ContentType: mimeType || 'application/octet-stream',
+      })
+    );
+    return true;
+  } catch (err: any) {
+    console.error('[R2_BUFFER_UPLOAD_ERROR]', { storageKey, error: err?.message || err });
+    throw err;
+  }
+}

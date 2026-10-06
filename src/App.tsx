@@ -31,14 +31,13 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 function MainApp() {
   const { user } = useAuth();
 
-  // Public deployment route guard: /api/deployments/* and *.host.doy.best must NEVER render the Optic React SPA
+  // Public deployment route guard: *.host.* and /api/deployments/* are served by the deployment server
   if (
     typeof window !== 'undefined' &&
     (window.location.hostname.includes('.host.') ||
       window.location.pathname.startsWith('/api/deployments') ||
       window.location.pathname.includes('/api/deployments/'))
   ) {
-    window.location.reload();
     return null;
   }
 

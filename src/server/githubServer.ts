@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { IncomingMessage } from 'http';
+import JSZip from 'jszip';
 import { getSupabaseServerClient } from './supabaseServer.js';
 import { getR2Client, getR2Config } from './r2Storage.js';
 import { GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
@@ -628,4 +629,97 @@ export async function fetchGitHubBranches(
     commitSha: b.commit?.sha || '',
     isDefault: b.name === defaultBranchName,
   }));
+}
+
+export interface GitHubRepositoryFile {
+  relativePath: string;
+  buffer: Buffer;
+  size: number;
+}
+
+/**
+ * Fetch the selected branch's ENTIRE repository recursively.
+ * Includes all files and nested directories, preserving their exact relative paths.
+ */
+export async function fetchRepositoryContentsRecursive(
+  accessToken: string,
+  owner: string,
+  repo: string,
+  ref: string
+): Promise<{ files: GitHubRepositoryFile[]; commitSha?: string }> {
+  const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/zipball/${encodeURIComponent(ref)}`;
+  console.log('[GITHUB_FETCH_ZIP]', { owner, repo, ref, url });
+
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'Optic-Hosting',
+    },
+    redirect: 'follow',
+  });
+
+  if (!res.ok) {
+    const errorBody = await res.text();
+    console.error('[GITHUB_FETCH_ZIP_FAILED]', { status: res.status, errorBody });
+    throw new Error(`GitHub zipball download failed (${res.status}): ${errorBody}`);
+  }
+
+  const arrayBuffer = await res.arrayBuffer();
+  const zipBuffer = Buffer.from(arrayBuffer);
+  console.log('[GITHUB_ZIP_DOWNLOADED]', { sizeBytes: zipBuffer.length });
+
+  const zip = await JSZip.loadAsync(zipBuffer);
+  const files: GitHubRepositoryFile[] = [];
+
+  // Determine root directory prefix created by GitHub zipball (e.g. "owner-repo-commitSha/")
+  const fileKeys = Object.keys(zip.files);
+  let rootPrefix = '';
+  if (fileKeys.length > 0) {
+    const firstKey = fileKeys[0];
+    const slashIdx = firstKey.indexOf('/');
+    if (slashIdx !== -1) {
+      rootPrefix = firstKey.substring(0, slashIdx + 1);
+    }
+  }
+
+  let commitSha = '';
+  if (rootPrefix) {
+    const parts = rootPrefix.replace(/\/$/, '').split('-');
+    if (parts.length > 0) {
+      commitSha = parts[parts.length - 1];
+    }
+  }
+
+  for (const [rawKey, zipObj] of Object.entries(zip.files)) {
+    if (zipObj.dir) continue;
+
+    // Strip top-level directory prefix
+    let relativePath = rawKey;
+    if (rootPrefix && relativePath.startsWith(rootPrefix)) {
+      relativePath = relativePath.substring(rootPrefix.length);
+    }
+
+    // Normalize slashes and strip leading slashes
+    relativePath = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!relativePath) continue;
+
+    // Skip git internal files
+    if (relativePath.startsWith('.git/') || relativePath === '.git') continue;
+
+    const fileBuf = await zipObj.async('nodebuffer');
+    files.push({
+      relativePath,
+      buffer: fileBuf,
+      size: fileBuf.length,
+    });
+  }
+
+  console.log('[GITHUB_ZIP_EXTRACTED]', {
+    fileCount: files.length,
+    commitSha,
+    fileSample: files.slice(0, 5).map((f) => f.relativePath),
+  });
+
+  return { files, commitSha };
 }
