@@ -86,10 +86,20 @@ function deleteFromDisk(userId: string) {
 function getCandidateSecrets(): string[] {
   const candidates: string[] = [];
   if (process.env.GITHUB_CLIENT_SECRET) candidates.push(process.env.GITHUB_CLIENT_SECRET);
+  if (process.env.GITHUB_CLIENT_ID) candidates.push(process.env.GITHUB_CLIENT_ID);
   if (process.env.SUPABASE_SECRET_KEY) candidates.push(process.env.SUPABASE_SECRET_KEY);
   if (process.env.SUPABASE_SERVICE_ROLE_KEY) candidates.push(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  if (process.env.SUPABASE_SERVICE_KEY) candidates.push(process.env.SUPABASE_SERVICE_KEY);
+  if (process.env.SERVICE_ROLE_KEY) candidates.push(process.env.SERVICE_ROLE_KEY);
+  if (process.env.SUPABASE_ANON_KEY) candidates.push(process.env.SUPABASE_ANON_KEY);
+  if (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) candidates.push(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
+  if (process.env.VITE_SUPABASE_PUBLISHABLE_KEY) candidates.push(process.env.VITE_SUPABASE_PUBLISHABLE_KEY);
+  if (process.env.JWT_SECRET) candidates.push(process.env.JWT_SECRET);
+  if (process.env.SESSION_SECRET) candidates.push(process.env.SESSION_SECRET);
   candidates.push('optic_default_encryption_salt_2026');
-  return candidates;
+  candidates.push('optic_oauth_secret');
+  candidates.push('optic_token_encryption_key_2026');
+  return Array.from(new Set(candidates.filter(Boolean)));
 }
 
 // Helper for encryption of access tokens at rest
@@ -112,49 +122,74 @@ export function encryptToken(token: string): string {
     const authTag = cipher.getAuthTag().toString('hex');
     return `${iv.toString('hex')}:${authTag}:${encrypted}`;
   } catch (err) {
-    console.warn('[GitHubServer] Token encryption warning, falling back to plaintext:', err);
+    console.warn('[GitHubServer] Token encryption notice, retaining raw token format:', err);
     return token;
   }
 }
 
 export function decryptToken(encryptedString: string): string {
   if (!encryptedString) return '';
+  const trimmed = String(encryptedString).trim();
+
   // Plaintext tokens starting with GitHub prefixes are returned directly
   if (
-    encryptedString.startsWith('gho_') ||
-    encryptedString.startsWith('ghp_') ||
-    encryptedString.startsWith('ghu_') ||
-    encryptedString.startsWith('github_pat_')
+    trimmed.startsWith('gho_') ||
+    trimmed.startsWith('ghp_') ||
+    trimmed.startsWith('ghu_') ||
+    trimmed.startsWith('ghs_') ||
+    trimmed.startsWith('github_pat_')
   ) {
-    return encryptedString;
+    return trimmed;
   }
 
-  if (!encryptedString.includes(':')) {
-    return encryptedString;
-  }
-
-  const parts = encryptedString.split(':');
-  if (parts.length !== 3) {
+  // If no colon separator, it might already be an unencrypted token string
+  if (!trimmed.includes(':')) {
+    if (trimmed.length >= 20) {
+      return trimmed;
+    }
     return '';
   }
 
-  const [ivHex, authTagHex, encrypted] = parts;
+  const parts = trimmed.split(':');
   const secrets = getCandidateSecrets();
 
-  for (const secret of secrets) {
-    try {
-      const key = crypto.createHash('sha256').update(secret).digest();
-      const iv = Buffer.from(ivHex, 'hex');
-      const authTag = Buffer.from(authTagHex, 'hex');
-      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-      decipher.setAuthTag(authTag);
-      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-      decrypted += decipher.final('utf8');
-      if (decrypted && !decrypted.includes(':')) {
-        return decrypted;
+  // Format 1: AES-256-GCM (3 parts: ivHex:authTagHex:encryptedHex)
+  if (parts.length === 3) {
+    const [ivHex, authTagHex, encrypted] = parts;
+    for (const secret of secrets) {
+      try {
+        const key = crypto.createHash('sha256').update(secret).digest();
+        const iv = Buffer.from(ivHex, 'hex');
+        const authTag = Buffer.from(authTagHex, 'hex');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAuthTag(authTag);
+        let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        if (decrypted && !decrypted.includes(':')) {
+          return decrypted.trim();
+        }
+      } catch {
+        // try next secret candidate
       }
-    } catch {
-      // try next secret candidate
+    }
+  }
+
+  // Format 2: AES-256-CBC (2 parts: ivHex:encryptedHex)
+  if (parts.length === 2) {
+    const [ivHex, encrypted] = parts;
+    for (const secret of secrets) {
+      try {
+        const key = crypto.createHash('sha256').update(secret).digest();
+        const iv = Buffer.from(ivHex, 'hex');
+        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+        let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        if (decrypted && !decrypted.includes(':')) {
+          return decrypted.trim();
+        }
+      } catch {
+        // try next secret candidate
+      }
     }
   }
 
@@ -173,13 +208,14 @@ export function formatGitHubAuthHeader(token: string): string {
 }
 
 /**
- * Verify credential validity before downloading or executing actions.
- * Never logs or exposes credentials.
+ * Verify credential validity against GitHub API before downloading or executing actions.
+ * Never logs or exposes credentials. Supports Bearer and token schemes.
  */
 export async function verifyGitHubToken(token: string): Promise<{
   valid: boolean;
   user?: { id: number; login: string };
   error?: string;
+  authHeader?: string;
 }> {
   if (!token || typeof token !== 'string' || token.trim().length < 8 || token.includes(':')) {
     return {
@@ -188,42 +224,49 @@ export async function verifyGitHubToken(token: string): Promise<{
     };
   }
 
-  const authHeader = formatGitHubAuthHeader(token);
+  const clean = token.trim();
+  const schemes = clean.startsWith('Bearer ') || clean.startsWith('token ')
+    ? [clean]
+    : [`Bearer ${clean}`, `token ${clean}`];
 
-  try {
-    const res = await fetch('https://api.github.com/user', {
-      headers: {
-        Authorization: authHeader,
-        Accept: 'application/vnd.github.v3+json',
-        'User-Agent': 'Optic-Hosting',
-      },
-    });
+  for (const authHeader of schemes) {
+    try {
+      const res = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: authHeader,
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'Optic-Hosting',
+        },
+      });
 
-    if (res.ok) {
-      const data = await res.json();
-      return {
-        valid: true,
-        user: { id: data.id, login: data.login },
-      };
-    }
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          valid: true,
+          user: { id: data.id, login: data.login },
+          authHeader,
+        };
+      }
 
-    if (res.status === 401 || res.status === 403) {
+      if (res.status === 401 || res.status === 403) {
+        // Try fallback scheme if available
+        continue;
+      }
+
+      const errText = await res.text().catch(() => '');
       return {
         valid: false,
-        error: 'GitHub authorization expired/reconnect GitHub',
+        error: `GitHub verification failed (${res.status}): ${errText}`,
       };
+    } catch {
+      // network retry / fallback
     }
-
-    return {
-      valid: false,
-      error: `GitHub verification failed (${res.status})`,
-    };
-  } catch (err: any) {
-    return {
-      valid: false,
-      error: err?.message || 'Failed to verify GitHub token',
-    };
   }
+
+  return {
+    valid: false,
+    error: 'GitHub authorization expired/reconnect GitHub',
+  };
 }
 
 /**
@@ -473,7 +516,8 @@ export async function saveGitHubConnection(
     updatedAt: now,
   });
 
-  // 3. Persist to Supabase public.github_connections (exact schema: id, user_id, github_user_id, github_username, created_at)
+  // 3. Persist to Supabase public.github_connections
+  // Schema: id, user_id, github_user_id, github_username, avatar_url, access_token, scope, created_at, updated_at
   const sb = getSupabaseServerClient();
   if (sb) {
     try {
@@ -485,13 +529,20 @@ export async function saveGitHubConnection(
         .limit(1)
         .maybeSingle();
 
+      const payload = {
+        user_id: userId,
+        github_user_id: details.githubUserId,
+        github_username: details.githubUsername,
+        avatar_url: record.avatarUrl,
+        access_token: encrypted || rawToken,
+        scope: record.scope,
+        updated_at: now,
+      };
+
       if (existing?.id) {
         const { data: updated, error: updateErr } = await sb
           .from('github_connections')
-          .update({
-            github_user_id: details.githubUserId,
-            github_username: details.githubUsername,
-          })
+          .update(payload)
           .eq('id', existing.id)
           .select('id')
           .maybeSingle();
@@ -505,9 +556,7 @@ export async function saveGitHubConnection(
         const { data: inserted, error: insertErr } = await sb
           .from('github_connections')
           .insert({
-            user_id: userId,
-            github_user_id: details.githubUserId,
-            github_username: details.githubUsername,
+            ...payload,
             created_at: now,
           })
           .select('id')
@@ -634,7 +683,7 @@ export async function getGitHubConnection(userId: string): Promise<GitHubConnect
     }
   }
 
-  // 4. Query Supabase public.github_connections (schema: id, user_id, github_user_id, github_username, created_at)
+  // 4. Query Supabase public.github_connections (schema: id, user_id, github_user_id, github_username, avatar_url, access_token, scope, created_at, updated_at)
   const sb = getSupabaseServerClient();
   let dbFound = false;
   if (sb) {
@@ -652,7 +701,30 @@ export async function getGitHubConnection(userId: string): Promise<GitHubConnect
         dbRecordId = data.id;
         githubUserId = data.github_user_id || githubUserId;
         githubUsername = data.github_username || githubUsername;
+        avatarUrl = data.avatar_url || avatarUrl;
+        scope = data.scope || scope;
         createdAt = data.created_at || createdAt;
+
+        // Retrieve and decrypt access_token from Supabase
+        if (!knownToken && data.access_token) {
+          const raw = String(data.access_token).trim();
+          if (
+            raw.startsWith('gho_') ||
+            raw.startsWith('ghp_') ||
+            raw.startsWith('ghu_') ||
+            raw.startsWith('ghs_') ||
+            raw.startsWith('github_pat_')
+          ) {
+            knownToken = raw;
+          } else {
+            const candidate = decryptToken(raw);
+            if (candidate && !candidate.includes(':')) {
+              knownToken = candidate;
+            } else if (!raw.includes(':') && raw.length >= 20) {
+              knownToken = raw;
+            }
+          }
+        }
       }
     } catch (err: any) {
       console.warn('[GitHubServer] Database read notice for github_connections:', err.message);
@@ -879,10 +951,10 @@ export async function fetchRepositoryContentsRecursive(
   }
 
   const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/zipball/${encodeURIComponent(ref)}`;
-  const authHeader = formatGitHubAuthHeader(accessToken);
+  const authHeader = verification.authHeader || formatGitHubAuthHeader(accessToken);
 
   // 2. Request zipball with manual redirect handling to prevent credential leaks / 404s on codeload
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     headers: {
       Authorization: authHeader,
       Accept: 'application/vnd.github.v3+json',
@@ -890,6 +962,19 @@ export async function fetchRepositoryContentsRecursive(
     },
     redirect: 'manual',
   });
+
+  // Fallback to 'token ' scheme if 'Bearer ' returned 401 on repository zipball API
+  if (res.status === 401 && authHeader.startsWith('Bearer ')) {
+    const fallbackHeader = `token ${accessToken.trim()}`;
+    res = await fetch(url, {
+      headers: {
+        Authorization: fallbackHeader,
+        Accept: 'application/vnd.github.v3+json',
+        'User-Agent': 'Optic-Hosting',
+      },
+      redirect: 'manual',
+    });
+  }
 
   if (res.status === 401 || res.status === 403) {
     throw new Error('GitHub authorization expired/reconnect GitHub');

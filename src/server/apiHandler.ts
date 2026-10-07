@@ -1257,11 +1257,22 @@ export async function handleApiRequest(
       }
 
       const connection = await getGitHubConnection(user.id);
-      if (!connection) {
+      if (!connection || !connection.accessToken) {
         return sendJson(res, 200, {
           success: true,
           configured: true,
           connected: false,
+        });
+      }
+
+      // Actively verify token validity with GitHub API
+      const tokenVerification = await verifyGitHubToken(connection.accessToken);
+      if (!tokenVerification.valid) {
+        return sendJson(res, 200, {
+          success: true,
+          configured: true,
+          connected: false,
+          error: 'GitHub authorization expired/reconnect GitHub',
         });
       }
 
@@ -1271,9 +1282,9 @@ export async function handleApiRequest(
         configured: true,
         connected: true,
         account: {
-          username: connection.githubUsername,
+          username: tokenVerification.user?.login || connection.githubUsername,
           avatarUrl: connection.avatarUrl,
-          githubUserId: connection.githubUserId,
+          githubUserId: tokenVerification.user?.id || connection.githubUserId,
           connectedAt: connection.createdAt,
         },
       });
