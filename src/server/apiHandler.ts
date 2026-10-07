@@ -46,6 +46,8 @@ import {
   fetchGitHubRepositories,
   fetchGitHubBranches,
   fetchRepositoryContentsRecursive,
+  verifyGitHubToken,
+  formatGitHubAuthHeader,
 } from './githubServer.js';
 
 interface WaitlistEntry {
@@ -1332,10 +1334,19 @@ export async function handleApiRequest(
 
       const connection = await getGitHubConnection(user.id);
       if (!connection?.accessToken) {
-        return sendJson(res, 400, {
+        return sendJson(res, 401, {
           success: false,
           repositories: [],
-          error: 'GitHub account is not connected. Please connect GitHub first.',
+          error: 'GitHub authorization expired/reconnect GitHub',
+        });
+      }
+
+      const tokenVerification = await verifyGitHubToken(connection.accessToken);
+      if (!tokenVerification.valid) {
+        return sendJson(res, 401, {
+          success: false,
+          repositories: [],
+          error: 'GitHub authorization expired/reconnect GitHub',
         });
       }
 
@@ -1349,10 +1360,16 @@ export async function handleApiRequest(
       });
     } catch (err: any) {
       console.error('[API /api/hosting/github/repos] Error:', err);
-      return sendJson(res, 500, {
+      const isAuthError =
+        err?.message?.includes('authorization expired') ||
+        err?.message?.includes('Bad credentials') ||
+        err?.message?.includes('401');
+      return sendJson(res, isAuthError ? 401 : 500, {
         success: false,
         repositories: [],
-        error: err?.message || 'Failed to fetch GitHub repositories.',
+        error: isAuthError
+          ? 'GitHub authorization expired/reconnect GitHub'
+          : err?.message || 'Failed to fetch GitHub repositories.',
       });
     }
   }
@@ -1377,10 +1394,19 @@ export async function handleApiRequest(
 
       const connection = await getGitHubConnection(user.id);
       if (!connection?.accessToken) {
-        return sendJson(res, 400, {
+        return sendJson(res, 401, {
           success: false,
           branches: [],
-          error: 'GitHub account is not connected. Please connect GitHub first.',
+          error: 'GitHub authorization expired/reconnect GitHub',
+        });
+      }
+
+      const tokenVerification = await verifyGitHubToken(connection.accessToken);
+      if (!tokenVerification.valid) {
+        return sendJson(res, 401, {
+          success: false,
+          branches: [],
+          error: 'GitHub authorization expired/reconnect GitHub',
         });
       }
 
@@ -1403,10 +1429,16 @@ export async function handleApiRequest(
       });
     } catch (err: any) {
       console.error('[API /api/hosting/github/branches] Error:', err);
-      return sendJson(res, 500, {
+      const isAuthError =
+        err?.message?.includes('authorization expired') ||
+        err?.message?.includes('Bad credentials') ||
+        err?.message?.includes('401');
+      return sendJson(res, isAuthError ? 401 : 500, {
         success: false,
         branches: [],
-        error: err?.message || 'Failed to fetch repository branches.',
+        error: isAuthError
+          ? 'GitHub authorization expired/reconnect GitHub'
+          : err?.message || 'Failed to fetch repository branches.',
       });
     }
   }
@@ -1652,9 +1684,19 @@ export async function handleApiRequest(
       // Retrieve GitHub connection for the authenticated user
       const connection = await getGitHubConnection(user.id);
       if (!connection?.accessToken) {
-        return sendJson(res, 400, {
+        return sendJson(res, 401, {
           success: false,
-          error: 'GitHub account is not connected. Please connect your GitHub account first.',
+          error: 'GitHub authorization expired/reconnect GitHub',
+        });
+      }
+
+      // Verify the credential is valid before downloading the repository
+      const tokenVerification = await verifyGitHubToken(connection.accessToken);
+      if (!tokenVerification.valid) {
+        console.warn('[GITHUB_DEPLOY] GitHub token validation failed for user:', user.id);
+        return sendJson(res, 401, {
+          success: false,
+          error: 'GitHub authorization expired/reconnect GitHub',
         });
       }
 
@@ -1836,9 +1878,77 @@ export async function handleApiRequest(
       });
     } catch (err: any) {
       console.error('[API /api/hosting/github/deploy] Error:', err);
-      return sendJson(res, 500, {
+      const isAuthError =
+        err?.message?.includes('authorization expired') ||
+        err?.message?.includes('Bad credentials') ||
+        err?.message?.includes('401');
+      return sendJson(res, isAuthError ? 401 : 500, {
         success: false,
-        error: err?.message || 'Failed to deploy GitHub repository.',
+        error: isAuthError
+          ? 'GitHub authorization expired/reconnect GitHub'
+          : err?.message || 'Failed to deploy GitHub repository.',
+      });
+    }
+  }
+
+  // 8b-9. GET /api/hosting?action=github-test-zipball
+  if (
+    ((pathname === '/api/hosting' && action === 'github-test-zipball') ||
+      pathname === '/api/hosting/github/test-zipball' ||
+      pathname.startsWith('/api/hosting/github/test-zipball')) &&
+    method === 'GET'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user?.id) {
+        return sendJson(res, 401, { success: false, error: 'Unauthorized. Sign in required.' });
+      }
+
+      const connection = await getGitHubConnection(user.id);
+      if (!connection?.accessToken) {
+        return sendJson(res, 401, {
+          success: false,
+          error: 'GitHub authorization expired/reconnect GitHub',
+        });
+      }
+
+      const parsed = new URL(url, 'http://localhost');
+      const owner = parsed.searchParams.get('owner') || '';
+      const repo = parsed.searchParams.get('repo') || '';
+      const ref = parsed.searchParams.get('ref') || 'main';
+
+      if (!owner || !repo) {
+        return sendJson(res, 400, {
+          success: false,
+          error: 'Both owner and repo are required query parameters.',
+        });
+      }
+
+      const { files, commitSha } = await fetchRepositoryContentsRecursive(
+        connection.accessToken,
+        owner,
+        repo,
+        ref
+      );
+
+      return sendJson(res, 200, {
+        success: true,
+        fileCount: files.length,
+        commitSha,
+        sampleFiles: files.slice(0, 5).map((f) => f.relativePath),
+      });
+    } catch (err: any) {
+      console.error('[API /api/hosting/github/test-zipball] Error:', err);
+      const isAuthError =
+        err?.message?.includes('authorization expired') ||
+        err?.message?.includes('Bad credentials') ||
+        err?.message?.includes('401');
+      return sendJson(res, isAuthError ? 401 : 500, {
+        success: false,
+        error: isAuthError
+          ? 'GitHub authorization expired/reconnect GitHub'
+          : err?.message || 'Failed to test repository zipball.',
       });
     }
   }

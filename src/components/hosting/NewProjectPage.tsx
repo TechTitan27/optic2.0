@@ -449,6 +449,11 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
               `Deployed ${deployData.fileCount} file(s) from ${repoFullName} (${deployBranch}) to production!`,
               'Deployment Live'
             );
+          } else if (deployData.error === 'GitHub authorization expired/reconnect GitHub') {
+            toast.error(
+              'GitHub authorization expired. Please reconnect your GitHub account.',
+              'GitHub Authorization Expired'
+            );
           } else {
             toast.success(
               `Project "${newProject.name}" connected to ${repoFullName} (${selectedBranch}).`,

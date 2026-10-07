@@ -160,6 +160,13 @@ class GitHubService {
         },
       });
       const data = await res.json();
+      if (!res.ok && data?.error) {
+        return {
+          success: false,
+          repositories: [],
+          error: data.error,
+        };
+      }
       return data;
     } catch (err: any) {
       return {
@@ -194,6 +201,13 @@ class GitHubService {
         },
       });
       const data = await res.json();
+      if (!res.ok && data?.error) {
+        return {
+          success: false,
+          branches: [],
+          error: data.error,
+        };
+      }
       return data;
     } catch (err: any) {
       return {
