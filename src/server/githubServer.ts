@@ -517,7 +517,7 @@ export async function saveGitHubConnection(
   });
 
   // 3. Persist to Supabase public.github_connections
-  // Schema: id, user_id, github_user_id, github_username, avatar_url, access_token, scope, created_at, updated_at
+  // Actual table schema has ONLY: id, user_id, github_user_id, github_username, created_at
   const sb = getSupabaseServerClient();
   if (sb) {
     try {
@@ -533,10 +533,6 @@ export async function saveGitHubConnection(
         user_id: userId,
         github_user_id: details.githubUserId,
         github_username: details.githubUsername,
-        avatar_url: record.avatarUrl,
-        access_token: encrypted || rawToken,
-        scope: record.scope,
-        updated_at: now,
       };
 
       if (existing?.id) {
@@ -573,7 +569,8 @@ export async function saveGitHubConnection(
     }
   }
 
-  // 4. Persistence in private R2 storage
+  // 4. Durable credential persistence in private R2 storage
+  // Secret token is encrypted at rest using AES-256-GCM. Never stored in client-accessible storage.
   const r2Client = getR2Client();
   const r2Config = getR2Config();
   if (r2Client && r2Config.bucketName) {
@@ -597,8 +594,9 @@ export async function saveGitHubConnection(
         ContentType: 'application/json',
       });
       await r2Client.send(putCmd);
-    } catch {
-      // non-blocking
+    } catch (r2Err: any) {
+      console.error('[GitHubServer] Error persisting credentials to R2 storage:', r2Err?.message || r2Err);
+      throw new Error(`Failed to securely persist GitHub credentials: ${r2Err?.message || 'Storage error'}`);
     }
   }
 
@@ -683,14 +681,14 @@ export async function getGitHubConnection(userId: string): Promise<GitHubConnect
     }
   }
 
-  // 4. Query Supabase public.github_connections (schema: id, user_id, github_user_id, github_username, avatar_url, access_token, scope, created_at, updated_at)
+  // 4. Query Supabase public.github_connections (schema: id, user_id, github_user_id, github_username, created_at)
   const sb = getSupabaseServerClient();
   let dbFound = false;
   if (sb) {
     try {
       const { data, error } = await sb
         .from('github_connections')
-        .select('*')
+        .select('id, user_id, github_user_id, github_username, created_at')
         .eq('user_id', userId)
         .order('created_at', { ascending: false })
         .limit(1)
@@ -701,30 +699,7 @@ export async function getGitHubConnection(userId: string): Promise<GitHubConnect
         dbRecordId = data.id;
         githubUserId = data.github_user_id || githubUserId;
         githubUsername = data.github_username || githubUsername;
-        avatarUrl = data.avatar_url || avatarUrl;
-        scope = data.scope || scope;
         createdAt = data.created_at || createdAt;
-
-        // Retrieve and decrypt access_token from Supabase
-        if (!knownToken && data.access_token) {
-          const raw = String(data.access_token).trim();
-          if (
-            raw.startsWith('gho_') ||
-            raw.startsWith('ghp_') ||
-            raw.startsWith('ghu_') ||
-            raw.startsWith('ghs_') ||
-            raw.startsWith('github_pat_')
-          ) {
-            knownToken = raw;
-          } else {
-            const candidate = decryptToken(raw);
-            if (candidate && !candidate.includes(':')) {
-              knownToken = candidate;
-            } else if (!raw.includes(':') && raw.length >= 20) {
-              knownToken = raw;
-            }
-          }
-        }
       }
     } catch (err: any) {
       console.warn('[GitHubServer] Database read notice for github_connections:', err.message);
