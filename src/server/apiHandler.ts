@@ -1177,6 +1177,9 @@ export async function handleApiRequest(
         githubUsername: ghUser.login,
         avatarUrl: ghUser.avatarUrl,
         accessToken: tokenData.accessToken,
+        refreshToken: tokenData.refreshToken,
+        expiresAt: tokenData.expiresIn ? Date.now() + tokenData.expiresIn * 1000 : undefined,
+        refreshTokenExpiresAt: tokenData.refreshTokenExpiresIn ? Date.now() + tokenData.refreshTokenExpiresIn * 1000 : undefined,
         scope: tokenData.scope,
       });
 
