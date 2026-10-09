@@ -1216,11 +1216,37 @@ export const supabaseData = {
       .select('*')
       .eq('project_id', projectId);
 
-    const { data, error } = await query.order('created_at', { ascending: false });
+    let data: any[] | null = null;
+    let error: any = null;
 
-    if (error) {
-      console.error('[Supabase] Error querying public.deployments:', error);
-      throw error;
+    try {
+      const res = await query.order('created_at', { ascending: false });
+      data = res.data;
+      error = res.error;
+    } catch (err: any) {
+      error = err;
+    }
+
+    if (error || !data || data.length === 0) {
+      // Fallback: Query server-side proxy which uses server credentials
+      try {
+        const fetchUrl = orgId
+          ? `/api/hosting?action=deployments&projectId=${encodeURIComponent(projectId)}&orgId=${encodeURIComponent(orgId)}`
+          : `/api/hosting?action=deployments&projectId=${encodeURIComponent(projectId)}`;
+        const res = await fetch(fetchUrl);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.deployments) && json.deployments.length > 0) {
+            return json.deployments;
+          }
+        }
+      } catch {
+        // non-blocking fallback
+      }
+    }
+
+    if (error && (!data || data.length === 0)) {
+      console.warn('[Supabase] Public deployments query notice:', error.message || error);
     }
 
     return (data || []).map((d: any) => ({

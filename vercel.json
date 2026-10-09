@@ -126,20 +126,20 @@
       "has": [
         {
           "type": "host",
-          "value": ".*\\.host\\..*"
+          "value": "(?<slug>[^.]+)\\.host\\..*"
         }
       ],
-      "destination": "/api/deployments"
+      "destination": "/api/deployments/:slug/"
     },
     {
       "source": "/:subpath*",
       "has": [
         {
           "type": "host",
-          "value": ".*\\.host\\..*"
+          "value": "(?<slug>[^.]+)\\.host\\..*"
         }
       ],
-      "destination": "/api/deployments?subpath=:subpath*"
+      "destination": "/api/deployments/:slug/:subpath*"
     },
     {
       "source": "/",

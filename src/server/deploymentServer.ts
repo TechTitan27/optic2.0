@@ -417,6 +417,13 @@ export async function resolveRequestTarget(
     }
     rawSubpath = rawSubpath.replace(/^\/+/, '');
 
+    // Strip leading subdomain prefix if rewritten internally to /api/deployments/:subdomain/...
+    if (rawSubpath === subdomain) {
+      rawSubpath = '';
+    } else if (rawSubpath.startsWith(`${subdomain}/`)) {
+      rawSubpath = rawSubpath.slice(subdomain.length + 1).replace(/^\/+/, '');
+    }
+
     console.log('[HOSTNAME_RESOLVE_STEP]', {
       step: 'wildcard_host_match',
       host,
@@ -602,32 +609,35 @@ export async function handleDeploymentRequest(
   const r2Client = options?.r2Client || getR2Client();
 
   if (!deployment && sb) {
-    try {
-      const { data: depData, error: depErr } = await sb
-        .from('deployments')
-        .select('id, project_id, organization_id, status, storage_path')
-        .eq('id', deploymentId)
-        .maybeSingle();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deploymentId);
+    if (isUuid) {
+      try {
+        const { data: depData, error: depErr } = await sb
+          .from('deployments')
+          .select('id, project_id, organization_id, status, storage_path')
+          .eq('id', deploymentId)
+          .maybeSingle();
 
-      if (depErr) {
-        console.warn('[Optic Hosting] Supabase query notice on deployments:', depErr.message);
-      }
+        if (depErr) {
+          console.warn('[Optic Hosting] Supabase query notice on deployments:', depErr.message);
+        }
 
-      if (depData) {
-        deployment = depData;
-        cacheDeploymentRecord({
-          id: depData.id,
-          project_id: depData.project_id,
-          organization_id: depData.organization_id,
-          status: depData.status || 'ready',
-          storage_path:
-            depData.storage_path ||
-            `deployments/${depData.organization_id}/${depData.project_id}/${depData.id}`,
-          createdAt: Date.now(),
-        });
+        if (depData) {
+          deployment = depData;
+          cacheDeploymentRecord({
+            id: depData.id,
+            project_id: depData.project_id,
+            organization_id: depData.organization_id,
+            status: depData.status || 'ready',
+            storage_path:
+              depData.storage_path ||
+              `deployments/${depData.organization_id}/${depData.project_id}/${depData.id}`,
+            createdAt: Date.now(),
+          });
+        }
+      } catch (err: any) {
+        console.warn('[Optic Hosting] DB lookup notice:', err.message);
       }
-    } catch (err: any) {
-      console.warn('[Optic Hosting] DB lookup notice:', err.message);
     }
   }
 
@@ -672,7 +682,7 @@ export async function handleDeploymentRequest(
   // 2b. Project Slug Endpoint Resolution: If identifier was not a direct deployment ID, resolve as project slug or project ID
   if (!deployment) {
     const prodDepId = await resolveProductionDeploymentId(deploymentId, options);
-    if (prodDepId && prodDepId !== deploymentId) {
+    if (prodDepId) {
       deployment = getCachedDeployment(prodDepId) || null;
       if (!deployment && sb) {
         try {

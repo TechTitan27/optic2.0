@@ -1753,18 +1753,43 @@ export async function handleApiRequest(
       // 3. Create initial deployment record in public.deployments
       if (sb) {
         try {
-          const { error: insErr } = await sb.from('deployments').insert({
+          const isUuid = (val: any) =>
+            typeof val === 'string' &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+
+          const validOrgId = isUuid(orgId)
+            ? orgId
+            : isUuid(projectData?.organization_id)
+            ? projectData.organization_id
+            : undefined;
+
+          const validUserId = isUuid(user.id)
+            ? user.id
+            : isUuid(projectData?.user_id)
+            ? projectData.user_id
+            : undefined;
+
+          const insertPayload: any = {
             id: deploymentId,
             project_id: projectId,
-            organization_id: orgId,
-            user_id: user.id,
             status: 'building',
             storage_path: storagePath,
             deployment_url: deploymentUrl,
-          });
+          };
+          if (validOrgId) insertPayload.organization_id = validOrgId;
+          if (validUserId) insertPayload.user_id = validUserId;
+
+          const { error: insErr } = await sb.from('deployments').insert(insertPayload);
 
           if (insErr) {
-            console.error('[GITHUB_DEPLOY] DB insert error:', insErr.message);
+            console.error('[GITHUB_DEPLOY] DB insert error, retrying with minimal fields:', insErr.message);
+            await sb.from('deployments').insert({
+              id: deploymentId,
+              project_id: projectId,
+              status: 'building',
+              storage_path: storagePath,
+              deployment_url: deploymentUrl,
+            });
           }
 
           // Insert initial deployment logs

@@ -23,7 +23,8 @@ import { Card } from '../common/Card';
 import { useOrganization } from '../../context/OrganizationContext';
 import { useAuth } from '../../context/AuthContext';
 import { supabaseData } from '../../lib/supabaseData';
-import { HostingProject } from '../../types';
+import { HostingProject, DeploymentItem } from '../../types';
+import { storageService } from '../../lib/storageService';
 import { useToast } from '../../context/ToastContext';
 import {
   githubService,
@@ -54,7 +55,7 @@ function GitHubLogoIcon({ size = 18, className = '' }: { size?: number; classNam
 
 interface NewProjectPageProps {
   onBackToHosting: () => void;
-  onProjectCreated: (project: HostingProject) => void;
+  onProjectCreated: (project: HostingProject, initialDeployment?: DeploymentItem) => void;
 }
 
 type ImportSource = 'github' | 'manual';
@@ -424,10 +425,13 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
 
         // Immediately trigger complete GitHub deployment
         const deployBranch = selectedBranch || selectedRepo.defaultBranch || 'main';
+        let initialDeployment: DeploymentItem | undefined;
+
         try {
-          const token = accessToken;
+          const token = accessToken || (await storageService.getAuthToken());
           const headers: Record<string, string> = { 'Content-Type': 'application/json' };
           if (token) headers['Authorization'] = `Bearer ${token}`;
+          if (user?.id) headers['x-user-id'] = user.id;
 
           const deployRes = await fetch('/api/hosting?action=github-deploy', {
             method: 'POST',
@@ -444,7 +448,27 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
           });
 
           const deployData = await deployRes.json();
-          if (deployData.success) {
+          if (deployData.success && deployData.deploymentId) {
+            initialDeployment = {
+              id: deployData.deploymentId,
+              projectId: newProject.id,
+              organizationId: currentOrg.id,
+              userId: user?.id,
+              projectName: newProject.name,
+              status: 'ready',
+              url: deployData.deploymentUrl || `https://${newProject.slug}.host.doy.best`,
+              deploymentUrl: deployData.deploymentUrl || `https://${newProject.slug}.host.doy.best`,
+              storagePath: `deployments/${currentOrg.id}/${newProject.id}/${deployData.deploymentId}`,
+              commitHash: deployData.commitSha || 'HEAD',
+              commitMessage: `Initial deploy from ${selectedRepo.name}@${deployBranch}`,
+              branch: deployBranch,
+              creator: activeCreator,
+              durationSeconds: 10,
+              environment: 'production',
+              createdAt: new Date().toISOString(),
+              completedAt: new Date().toISOString(),
+            };
+
             toast.success(
               `Deployed ${deployData.fileCount} file(s) from ${repoFullName} (${deployBranch}) to production!`,
               'Deployment Live'
@@ -467,6 +491,9 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
             'GitHub Project Configured'
           );
         }
+
+        onProjectCreated(newProject, initialDeployment);
+        return;
       } else {
         // Create manual / static project
         newProject = await supabaseData.createHostingProject(currentOrg.id, {
@@ -484,9 +511,10 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
           `Project "${newProject.name}" created under ${currentOrg.name}.`,
           'Project Ready'
         );
-      }
 
-      onProjectCreated(newProject);
+        onProjectCreated(newProject);
+        return;
+      }
     } catch (err: any) {
       console.error('[NewProjectPage] Project creation error:', err);
       const msg = err?.message || 'Failed to create project. Please verify your connection and try again.';

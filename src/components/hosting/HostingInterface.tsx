@@ -229,7 +229,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
 
     try {
       const deps = await supabaseData.getProjectDeployments(selectedProject.id, currentOrg?.id);
-      setDeploymentsList(deps);
+      setDeploymentsList((prev) => (deps.length > 0 ? deps : prev));
 
       // Load production target
       const prodTarget = await supabaseData.getProductionDeployment(selectedProject.id, selectedProject.slug);
@@ -237,14 +237,15 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
         setProductionDeploymentId(prodTarget);
       } else {
         // Default to newest ready deployment
-        const firstReady = deps.find((d) => d.status === 'ready');
+        const firstReady = (deps.length > 0 ? deps : deploymentsList).find((d) => d.status === 'ready');
         if (firstReady) {
           setProductionDeploymentId(firstReady.id);
         }
       }
 
-      if (deps.length > 0 && !selectedDeploymentForLogs) {
-        setSelectedDeploymentForLogs(deps[0].id);
+      const activeDeps = deps.length > 0 ? deps : deploymentsList;
+      if (activeDeps.length > 0 && !selectedDeploymentForLogs) {
+        setSelectedDeploymentForLogs(activeDeps[0].id);
       }
     } catch (err: any) {
       console.error('Error loading deployments:', err);
@@ -639,8 +640,13 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
     return (
       <NewProjectPage
         onBackToHosting={handleBackToProjects}
-        onProjectCreated={(newProject) => {
+        onProjectCreated={(newProject, initialDeployment) => {
           setProjects((prev) => [newProject, ...prev.filter((p) => p.id !== newProject.id)]);
+          if (initialDeployment) {
+            setDeploymentsList([initialDeployment]);
+            setProductionDeploymentId(initialDeployment.id);
+            setSelectedDeploymentForLogs(initialDeployment.id);
+          }
           handleSelectProject(newProject);
         }}
       />
