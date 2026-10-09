@@ -1216,10 +1216,6 @@ export const supabaseData = {
       .select('*')
       .eq('project_id', projectId);
 
-    if (orgId) {
-      query = query.eq('organization_id', orgId);
-    }
-
     const { data, error } = await query.order('created_at', { ascending: false });
 
     if (error) {

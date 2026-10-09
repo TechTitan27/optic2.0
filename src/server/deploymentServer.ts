@@ -278,9 +278,9 @@ export async function resolveProductionDeploymentId(
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean);
       let query = sb.from('projects').select('id, organization_id, slug, name');
       if (isUuid) {
-        query = query.or(`slug.eq.${clean},id.eq.${clean}`);
+        query = query.or(`slug.ilike.${clean},id.eq.${clean}`);
       } else {
-        query = query.eq('slug', clean);
+        query = query.ilike('slug', clean);
       }
       const { data: proj, error: projErr } = await query.maybeSingle();
 
@@ -303,9 +303,9 @@ export async function resolveProductionDeploymentId(
         // Query latest ready deployment
         const { data: dep, error: depErr } = await sb
           .from('deployments')
-          .select('id, status, storage_path, organization_id, project_id')
+          .select('id, status, storage_path, organization_id, project_id, created_at, completed_at')
           .eq('project_id', proj.id)
-          .eq('status', 'ready')
+          .in('status', ['ready', 'READY', 'Ready'])
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -329,7 +329,7 @@ export async function resolveProductionDeploymentId(
             id: dep.id,
             project_id: dep.project_id || proj.id,
             organization_id: dep.organization_id || proj.organization_id,
-            status: dep.status || 'ready',
+            status: 'ready',
             storage_path:
               dep.storage_path ||
               `deployments/${dep.organization_id || proj.organization_id}/${proj.id}/${dep.id}`,
@@ -396,13 +396,63 @@ export async function resolveRequestTarget(
   const parsed = new URL(candidate, 'http://localhost');
   const pathname = parsed.pathname;
 
-  // A. Check for Vercel query-based rewrite: ?project=:project&subpath=:subpath
+  // 1. Host-based wildcard routing check: *.host.doy.best, *.host.optic.doy.best, *.host.localhost, or any *.host.*
+  const hostMatch = host.match(/^([a-z0-9_-]+)\.host(?:\..+)?$/i);
+  if (hostMatch) {
+    const subdomain = hostMatch[1].toLowerCase().trim();
+
+    // Extract rawSubpath cleanly: check query parameter subpath first, then candidate pathname
+    let rawSubpath = '';
+    const subpathParam = parsed.searchParams.get('subpath');
+    if (subpathParam !== null && !subpathParam.startsWith(':')) {
+      rawSubpath = subpathParam;
+    } else {
+      let cleanPath = pathname;
+      if (cleanPath.startsWith('/api/deployments')) {
+        cleanPath = cleanPath.replace(/^\/api\/deployments\/?/, '');
+      }
+      if (cleanPath && !cleanPath.startsWith(':')) {
+        rawSubpath = cleanPath;
+      }
+    }
+    rawSubpath = rawSubpath.replace(/^\/+/, '');
+
+    console.log('[HOSTNAME_RESOLVE_STEP]', {
+      step: 'wildcard_host_match',
+      host,
+      subdomain,
+      rawSubpath,
+    });
+
+    // Is subdomain a deployment UUID or known cached deployment?
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(subdomain);
+    if (isUuid || getCachedDeployment(subdomain)) {
+      return {
+        deploymentId: subdomain,
+        rawSubpath,
+        rawUrl: candidate || reqUrl,
+        isHostRouting: true,
+      };
+    }
+
+    // Subdomain is a project slug: resolve latest READY production deployment ID
+    const prodDepId = await resolveProductionDeploymentId(subdomain, options);
+    return {
+      deploymentId: prodDepId || '',
+      rawSubpath,
+      rawUrl: candidate || reqUrl,
+      isHostRouting: true,
+      projectSlug: subdomain,
+    };
+  }
+
+  // 2. Check for explicit query-based rewrite: ?project=:project&subpath=:subpath
   const projectParam = parsed.searchParams.get('project');
   const subpathParam = parsed.searchParams.get('subpath') ?? '';
 
-  if (projectParam) {
+  if (projectParam && !projectParam.startsWith(':')) {
     const cleanProject = projectParam.toLowerCase().trim();
-    const rawSubpath = subpathParam.replace(/^\/+/, '');
+    const rawSubpath = (subpathParam.startsWith(':') ? '' : subpathParam).replace(/^\/+/, '');
     console.log('[HOSTNAME_RESOLVE_STEP]', {
       step: 'vercel_rewrite_query_match',
       projectParam: cleanProject,
@@ -419,42 +469,7 @@ export async function resolveRequestTarget(
     };
   }
 
-  // B. Host-based wildcard routing check: *.host.doy.best, *.host.optic.doy.best, or *.host.localhost
-  const hostMatch = host.match(/^([a-z0-9_-]+)\.host\.(?:doy\.best|optic\.doy\.best|localhost)$/i);
-  if (hostMatch) {
-    const subdomain = hostMatch[1].toLowerCase();
-    const rawSubpath = pathname.replace(/^\/+/, '');
-
-    console.log('[HOSTNAME_RESOLVE_STEP]', {
-      step: 'wildcard_host_match',
-      host,
-      subdomain,
-      rawSubpath,
-    });
-
-    // Is subdomain a deployment ID (UUID or known cached deployment)?
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(subdomain);
-    if (isUuid || getCachedDeployment(subdomain)) {
-      return {
-        deploymentId: subdomain,
-        rawSubpath,
-        rawUrl: candidate || reqUrl,
-        isHostRouting: true,
-      };
-    }
-
-    // Subdomain is a project slug: resolve production deployment ID
-    const prodDepId = await resolveProductionDeploymentId(subdomain, options);
-    return {
-      deploymentId: prodDepId || '',
-      rawSubpath,
-      rawUrl: candidate || reqUrl,
-      isHostRouting: true,
-      projectSlug: subdomain,
-    };
-  }
-
-  // C. Standard /api/deployments/:deploymentId/* parsing
+  // 3. Standard /api/deployments/:deploymentId/* parsing
   let deploymentId = '';
   let rawSubpath = '';
 
@@ -467,21 +482,23 @@ export async function resolveRequestTarget(
   // Check query params if not found via pathname
   if (!deploymentId) {
     const depIdParam = parsed.searchParams.get('deploymentId');
-    if (depIdParam) {
+    if (depIdParam && !depIdParam.startsWith(':')) {
       deploymentId = depIdParam;
     }
-    if (subpathParam) {
+    if (subpathParam && !subpathParam.startsWith(':')) {
       rawSubpath = subpathParam;
     }
     const pathParam = parsed.searchParams.get('path');
-    if (pathParam && !deploymentId) {
+    if (pathParam && !deploymentId && !pathParam.startsWith(':')) {
       const parts = pathParam.replace(/^\/+/, '').split('/');
       deploymentId = parts[0] || '';
       rawSubpath = parts.slice(1).join('/');
     }
-  } else if (!rawSubpath && subpathParam) {
+  } else if (!rawSubpath && subpathParam && !subpathParam.startsWith(':')) {
     rawSubpath = subpathParam;
   }
+
+  rawSubpath = rawSubpath.replace(/^\/+/, '');
 
   return {
     deploymentId,

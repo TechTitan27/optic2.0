@@ -38,7 +38,25 @@ function MainApp() {
       window.location.pathname.startsWith('/api/deployments') ||
       window.location.pathname.includes('/api/deployments/'))
   ) {
-    return null;
+    return (
+      <div className="min-h-screen bg-[#09090b] text-[#f4f4f5] flex items-center justify-center font-sans p-6">
+        <div className="text-center max-w-md p-8 bg-[#18181b] border border-[#27272a] rounded-xl shadow-2xl">
+          <div className="w-10 h-10 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto mb-4 font-bold">
+            ⚡
+          </div>
+          <h2 className="text-lg font-semibold text-white mb-2">Connecting to Edge Deployment</h2>
+          <p className="text-xs text-zinc-400 leading-relaxed mb-4">
+            Routing website assets from the Optic Cloud Edge Network...
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium cursor-pointer transition-colors"
+          >
+            Reload Page
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // 1. Initial surface detection with hostname as primary source of truth

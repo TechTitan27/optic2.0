@@ -126,20 +126,20 @@
       "has": [
         {
           "type": "host",
-          "value": "(?<project>[^.]+)\\.host\\.(?<domain>.*)"
+          "value": ".*\\.host\\..*"
         }
       ],
-      "destination": "/api/deployments?project=:project&subpath="
+      "destination": "/api/deployments"
     },
     {
-      "source": "/:path*",
+      "source": "/:subpath*",
       "has": [
         {
           "type": "host",
-          "value": "(?<project>[^.]+)\\.host\\.(?<domain>.*)"
+          "value": ".*\\.host\\..*"
         }
       ],
-      "destination": "/api/deployments?project=:project&subpath=:path*"
+      "destination": "/api/deployments?subpath=:subpath*"
     },
     {
       "source": "/",

@@ -153,10 +153,11 @@ export async function handleApiRequest(
     ''
   ).toLowerCase().split(':')[0];
 
-  // 0. Host-based deployed sites (*.host.doy.best, *.host.optic.doy.best, *.host.localhost)
+  // 0. Host-based deployed sites (*.host.doy.best, *.host.optic.doy.best, *.host.localhost, or any *.host.*)
   // or explicit /api/deployments/:deploymentId/* paths must enter public static file serving directly.
   // Never let the Vite SPA fallback capture deployed-site requests.
   const isDeployedHost =
+    hostHeader.includes('.host.') ||
     hostHeader.endsWith('.host.doy.best') ||
     hostHeader.endsWith('.host.optic.doy.best') ||
     hostHeader.endsWith('.host.localhost');
@@ -1752,7 +1753,7 @@ export async function handleApiRequest(
       // 3. Create initial deployment record in public.deployments
       if (sb) {
         try {
-          await sb.from('deployments').insert({
+          const { error: insErr } = await sb.from('deployments').insert({
             id: deploymentId,
             project_id: projectId,
             organization_id: orgId,
@@ -1760,10 +1761,27 @@ export async function handleApiRequest(
             status: 'building',
             storage_path: storagePath,
             deployment_url: deploymentUrl,
-            commit_message:
-              deploymentNote || `GitHub Deploy: ${owner}/${repoName}@${targetBranch}`,
-            commit_hash: commitSha || null,
           });
+
+          if (insErr) {
+            console.error('[GITHUB_DEPLOY] DB insert error:', insErr.message);
+          }
+
+          // Insert initial deployment logs
+          await sb.from('deployment_logs').insert([
+            {
+              deployment_id: deploymentId,
+              message: `Initiating deployment for ${owner}/${repoName}@${targetBranch}`,
+              level: 'info',
+              created_at: new Date().toISOString(),
+            },
+            {
+              deployment_id: deploymentId,
+              message: `Fetched ${files.length} repository file(s) from branch "${targetBranch}" (commit: ${commitSha || 'HEAD'})`,
+              level: 'info',
+              created_at: new Date().toISOString(),
+            },
+          ]);
         } catch (dbErr: any) {
           console.warn('[GITHUB_DEPLOY] DB insert notice:', dbErr.message);
         }
@@ -1808,10 +1826,30 @@ export async function handleApiRequest(
       const completedAt = new Date().toISOString();
       if (sb) {
         try {
-          await sb
+          const { error: upErr } = await sb
             .from('deployments')
             .update({ status: 'ready', completed_at: completedAt })
             .eq('id', deploymentId);
+
+          if (upErr) {
+            console.warn('[GITHUB_DEPLOY] DB status update notice:', upErr.message);
+          }
+
+          // Insert completion deployment logs
+          await sb.from('deployment_logs').insert([
+            {
+              deployment_id: deploymentId,
+              message: `Uploaded ${uploadedToR2Count || files.length} file(s) to edge storage (${storagePath})`,
+              level: 'info',
+              created_at: new Date().toISOString(),
+            },
+            {
+              deployment_id: deploymentId,
+              message: `Deployment READY. Live at ${deploymentUrl}`,
+              level: 'success',
+              created_at: completedAt,
+            },
+          ]);
         } catch (upErr: any) {
           console.warn('[GITHUB_DEPLOY] DB status update notice:', upErr.message);
         }
