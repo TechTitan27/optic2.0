@@ -1611,6 +1611,8 @@ export async function handleApiRequest(
       pathname.startsWith('/api/hosting/github/deploy')) &&
     method === 'POST'
   ) {
+    let activeDeploymentId: string | null = null;
+    const sb = getSupabaseServerClient();
     try {
       const authHeader = req.headers['authorization'] as string | undefined;
       const user = await getAuthenticatedUser(req);
@@ -1633,16 +1635,15 @@ export async function handleApiRequest(
         return sendJson(res, 400, { success: false, error: 'projectId is required.' });
       }
 
-      const sb = getSupabaseServerClient();
       let projectData: any = null;
       let ghRepoData: any = null;
 
       if (sb) {
-        // Query project (NO projects.git_branch query)
+        // Query project
         try {
           const { data: p } = await sb
             .from('projects')
-            .select('id, user_id, organization_id, name, slug')
+            .select('id, user_id, organization_id, name, slug, git_repo, git_branch')
             .eq('id', projectId)
             .maybeSingle();
           projectData = p;
@@ -1673,18 +1674,20 @@ export async function handleApiRequest(
       let repoName = (bodyRepo || ghRepoData?.name || '').trim();
 
       if (!owner || !repoName) {
-        const fullName = ghRepoData?.full_name || '';
-        if (fullName.includes('/')) {
-          owner = fullName.split('/')[0].trim();
-          repoName = fullName.split('/')[1].trim();
+        const candidateFull = (body.gitRepo || body.git_repo || ghRepoData?.full_name || projectData?.git_repo || '').trim();
+        if (candidateFull.includes('/')) {
+          const parts = candidateFull.split('/');
+          owner = parts[0].trim();
+          repoName = parts[1].trim();
         }
       }
 
-      // Selected branch strictly from github_repositories.selected_branch (or passed override)
+      // Selected branch strictly from github_repositories.selected_branch (or passed override / projectData)
       const targetBranch = (
         branch ||
         ghRepoData?.selected_branch ||
         ghRepoData?.default_branch ||
+        projectData?.git_branch ||
         'main'
       ).trim();
 
@@ -1747,6 +1750,7 @@ export async function handleApiRequest(
 
       // 2. Generate deployment ID and storage path
       const deploymentId = crypto.randomUUID();
+      activeDeploymentId = deploymentId;
       const storagePath = `deployments/${orgId}/${projectId}/${deploymentId}`;
       const deploymentUrl = `https://${projectSlug}.host.doy.best`;
 
@@ -1959,8 +1963,34 @@ export async function handleApiRequest(
         err?.message?.includes('authorization expired') ||
         err?.message?.includes('Bad credentials') ||
         err?.message?.includes('401');
+
+      if (activeDeploymentId && sb) {
+        try {
+          const failureMsg = isAuthError
+            ? 'GitHub authorization expired. Please reconnect your GitHub account.'
+            : (err?.message || 'Failed to deploy GitHub repository.');
+          await sb
+            .from('deployments')
+            .update({ status: 'failed', completed_at: new Date().toISOString() })
+            .eq('id', activeDeploymentId);
+          await sb
+            .from('deployment_logs')
+            .insert([
+              {
+                deployment_id: activeDeploymentId,
+                message: `Deployment failed: ${failureMsg}`,
+                level: 'error',
+                created_at: new Date().toISOString(),
+              },
+            ]);
+        } catch (logErr: any) {
+          console.warn('[GITHUB_DEPLOY] Notice recording deployment failure in DB:', logErr.message);
+        }
+      }
+
       return sendJson(res, isAuthError ? 401 : 500, {
         success: false,
+        deploymentId: activeDeploymentId || undefined,
         error: isAuthError
           ? 'GitHub authorization expired/reconnect GitHub'
           : err?.message || 'Failed to deploy GitHub repository.',

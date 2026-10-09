@@ -2,6 +2,26 @@
   "version": 2,
   "rewrites": [
     {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "(?<slug>[^.]+)\\.host.*"
+        }
+      ],
+      "destination": "/api/deployments?deploymentId=:slug"
+    },
+    {
+      "source": "/:subpath*",
+      "has": [
+        {
+          "type": "host",
+          "value": "(?<slug>[^.]+)\\.host.*"
+        }
+      ],
+      "destination": "/api/deployments?deploymentId=:slug&subpath=:subpath*"
+    },
+    {
       "source": "/api/health",
       "destination": "/api/health"
     },
@@ -120,26 +140,6 @@
     {
       "source": "/api/domains/:path*",
       "destination": "/api/domains"
-    },
-    {
-      "source": "/",
-      "has": [
-        {
-          "type": "host",
-          "value": "(?<slug>[^.]+)\\.host\\..*"
-        }
-      ],
-      "destination": "/api/deployments/:slug/"
-    },
-    {
-      "source": "/:subpath*",
-      "has": [
-        {
-          "type": "host",
-          "value": "(?<slug>[^.]+)\\.host\\..*"
-        }
-      ],
-      "destination": "/api/deployments/:slug/:subpath*"
     },
     {
       "source": "/",

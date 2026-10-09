@@ -85,31 +85,13 @@ function deleteFromDisk(userId: string) {
   }
 }
 
-function getCandidateSecrets(): string[] {
-  const candidates: string[] = [];
-  if (process.env.GITHUB_CLIENT_SECRET) candidates.push(process.env.GITHUB_CLIENT_SECRET);
-  if (process.env.GITHUB_CLIENT_ID) candidates.push(process.env.GITHUB_CLIENT_ID);
-  if (process.env.SUPABASE_SECRET_KEY) candidates.push(process.env.SUPABASE_SECRET_KEY);
-  if (process.env.SUPABASE_SERVICE_ROLE_KEY) candidates.push(process.env.SUPABASE_SERVICE_ROLE_KEY);
-  if (process.env.SUPABASE_SERVICE_KEY) candidates.push(process.env.SUPABASE_SERVICE_KEY);
-  if (process.env.SERVICE_ROLE_KEY) candidates.push(process.env.SERVICE_ROLE_KEY);
-  if (process.env.SUPABASE_ANON_KEY) candidates.push(process.env.SUPABASE_ANON_KEY);
-  if (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) candidates.push(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
-  if (process.env.VITE_SUPABASE_PUBLISHABLE_KEY) candidates.push(process.env.VITE_SUPABASE_PUBLISHABLE_KEY);
-  if (process.env.JWT_SECRET) candidates.push(process.env.JWT_SECRET);
-  if (process.env.SESSION_SECRET) candidates.push(process.env.SESSION_SECRET);
-  candidates.push('optic_default_encryption_salt_2026');
-  candidates.push('optic_oauth_secret');
-  candidates.push('optic_token_encryption_key_2026');
-  return Array.from(new Set(candidates.filter(Boolean)));
-}
-
-// Helper for encryption of access tokens at rest
-function getEncryptionKey(): Buffer {
-  const secret =
-    process.env.GITHUB_CLIENT_SECRET ||
-    process.env.SUPABASE_SECRET_KEY ||
-    'optic_default_encryption_salt_2026';
+// Helper for encryption of access tokens at rest using dedicated GITHUB_TOKEN_ENCRYPTION_KEY
+function getEncryptionKey(): Buffer | null {
+  const secret = process.env.GITHUB_TOKEN_ENCRYPTION_KEY;
+  if (!secret) {
+    console.error('[GitHubServer] GITHUB_TOKEN_ENCRYPTION_KEY environment variable is not configured.');
+    return null;
+  }
   return crypto.createHash('sha256').update(secret).digest();
 }
 
@@ -117,15 +99,18 @@ export function encryptToken(token: string): string {
   if (!token) return '';
   try {
     const key = getEncryptionKey();
+    if (!key) {
+      throw new Error('Missing GITHUB_TOKEN_ENCRYPTION_KEY');
+    }
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
     let encrypted = cipher.update(token, 'utf8', 'hex');
     encrypted += cipher.final('hex');
     const authTag = cipher.getAuthTag().toString('hex');
     return `${iv.toString('hex')}:${authTag}:${encrypted}`;
-  } catch (err) {
-    console.warn('[GitHubServer] Token encryption notice, retaining raw token format:', err);
-    return token;
+  } catch (err: any) {
+    console.error('[GitHubServer] Token encryption error:', err?.message || 'Encryption failed');
+    throw new Error('Failed to encrypt GitHub token. Check GITHUB_TOKEN_ENCRYPTION_KEY configuration.');
   }
 }
 
@@ -144,54 +129,25 @@ export function decryptToken(encryptedString: string): string {
     return trimmed;
   }
 
-  // If no colon separator, it might already be an unencrypted token string
-  if (!trimmed.includes(':')) {
-    if (trimmed.length >= 20) {
-      return trimmed;
-    }
-    return '';
-  }
-
+  // Format: AES-256-GCM (3 parts: ivHex:authTagHex:encryptedHex)
   const parts = trimmed.split(':');
-  const secrets = getCandidateSecrets();
-
-  // Format 1: AES-256-GCM (3 parts: ivHex:authTagHex:encryptedHex)
   if (parts.length === 3) {
     const [ivHex, authTagHex, encrypted] = parts;
-    for (const secret of secrets) {
-      try {
-        const key = crypto.createHash('sha256').update(secret).digest();
-        const iv = Buffer.from(ivHex, 'hex');
-        const authTag = Buffer.from(authTagHex, 'hex');
-        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-        decipher.setAuthTag(authTag);
-        let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-        if (decrypted && !decrypted.includes(':')) {
-          return decrypted.trim();
-        }
-      } catch {
-        // try next secret candidate
+    try {
+      const key = getEncryptionKey();
+      if (!key) return '';
+      const iv = Buffer.from(ivHex, 'hex');
+      const authTag = Buffer.from(authTagHex, 'hex');
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAuthTag(authTag);
+      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+      if (decrypted && !decrypted.includes(':')) {
+        return decrypted.trim();
       }
-    }
-  }
-
-  // Format 2: AES-256-CBC (2 parts: ivHex:encryptedHex)
-  if (parts.length === 2) {
-    const [ivHex, encrypted] = parts;
-    for (const secret of secrets) {
-      try {
-        const key = crypto.createHash('sha256').update(secret).digest();
-        const iv = Buffer.from(ivHex, 'hex');
-        const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-        let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-        if (decrypted && !decrypted.includes(':')) {
-          return decrypted.trim();
-        }
-      } catch {
-        // try next secret candidate
-      }
+    } catch {
+      // Key mismatch or invalid tag
+      return '';
     }
   }
 
@@ -534,7 +490,7 @@ export async function fetchGitHubUserProfile(accessToken: string): Promise<{
 }
 
 /**
- * Save user GitHub connection securely in Supabase, local cache, and durable R2 storage
+ * Save user GitHub connection securely in Supabase github_connection_secrets (source of truth)
  */
 export async function saveGitHubConnection(
   userId: string,
@@ -556,7 +512,7 @@ export async function saveGitHubConnection(
   }
 
   const encrypted = encryptToken(rawToken);
-  const encryptedRefreshToken = details.refreshToken ? encryptToken(details.refreshToken) : undefined;
+  const encryptedRefreshToken = details.refreshToken ? encryptToken(details.refreshToken) : null;
 
   const record: GitHubConnectionRecord = {
     userId,
@@ -580,7 +536,6 @@ export async function saveGitHubConnection(
     githubUserId: details.githubUserId,
     githubUsername: details.githubUsername,
     avatarUrl: record.avatarUrl,
-    token: rawToken,
     encryptedToken: encrypted,
     encryptedRefreshToken,
     expiresAt: details.expiresAt,
@@ -590,8 +545,9 @@ export async function saveGitHubConnection(
   });
 
   // 3. Persist metadata to Supabase public.github_connections
-  // Actual table schema has ONLY: id, user_id, github_user_id, github_username, created_at
   const sb = getSupabaseServerClient();
+  let connectionId: string | undefined = undefined;
+
   if (sb) {
     try {
       const { data: existing } = await sb
@@ -602,30 +558,30 @@ export async function saveGitHubConnection(
         .limit(1)
         .maybeSingle();
 
-      const payload = {
+      const connPayload: any = {
         user_id: userId,
         github_user_id: details.githubUserId,
         github_username: details.githubUsername,
+        avatar_url: record.avatarUrl,
+        updated_at: now,
       };
 
       if (existing?.id) {
-        const { data: updated, error: updateErr } = await sb
+        connectionId = existing.id;
+        record.id = existing.id;
+        const { error: updateErr } = await sb
           .from('github_connections')
-          .update(payload)
-          .eq('id', existing.id)
-          .select('id')
-          .maybeSingle();
+          .update(connPayload)
+          .eq('id', existing.id);
 
         if (updateErr) {
           console.warn('[GitHubServer] Notice updating public.github_connections:', updateErr.message);
-        } else if (updated?.id) {
-          record.id = updated.id;
         }
       } else {
         const { data: inserted, error: insertErr } = await sb
           .from('github_connections')
           .insert({
-            ...payload,
+            ...connPayload,
             created_at: now,
           })
           .select('id')
@@ -634,16 +590,57 @@ export async function saveGitHubConnection(
         if (insertErr) {
           console.warn('[GitHubServer] Notice inserting to public.github_connections:', insertErr.message);
         } else if (inserted?.id) {
+          connectionId = inserted.id;
           record.id = inserted.id;
         }
       }
+
+      // 4. Persist encrypted tokens to Supabase public.github_connection_secrets (Source of Truth)
+      const secretPayload: any = {
+        connection_id: connectionId || null,
+        user_id: userId,
+        encrypted_access_token: encrypted,
+        token_expires_at: details.expiresAt ? new Date(details.expiresAt).toISOString() : null,
+        refresh_token_encrypted: encryptedRefreshToken,
+        token_scopes: record.scope,
+        token_updated_at: now,
+      };
+
+      const { data: existingSecret } = await sb
+        .from('github_connection_secrets')
+        .select('id')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingSecret?.id) {
+        const { error: secUpdErr } = await sb
+          .from('github_connection_secrets')
+          .update(secretPayload)
+          .eq('id', existingSecret.id);
+
+        if (secUpdErr) {
+          console.warn('[GitHubServer] Notice updating public.github_connection_secrets:', secUpdErr.message);
+        }
+      } else {
+        const { error: secInsErr } = await sb
+          .from('github_connection_secrets')
+          .insert({
+            ...secretPayload,
+            created_at: now,
+          });
+
+        if (secInsErr) {
+          console.warn('[GitHubServer] Notice inserting to public.github_connection_secrets:', secInsErr.message);
+        }
+      }
     } catch (err: any) {
-      console.warn('[GitHubServer] Database connection notice during github_connections save:', err.message);
+      console.warn('[GitHubServer] Database notice during GitHub credentials save:', err.message);
     }
   }
 
-  // 4. Durable credential persistence in private Cloudflare R2 storage
-  // Secret token is encrypted at rest using AES-256-GCM. Never stored in client-accessible storage.
+  // 5. Durable credential backup in private Cloudflare R2 storage
   const r2Client = getR2Client();
   const r2Config = getR2Config();
   if (r2Client && r2Config.bucketName) {
@@ -656,7 +653,6 @@ export async function saveGitHubConnection(
         encryptedToken: encrypted,
         encryptedRefreshToken,
         expiresAt: details.expiresAt,
-        refreshTokenExpiresAt: details.refreshTokenExpiresAt,
         scope: record.scope,
         updatedAt: now,
       };
@@ -669,50 +665,74 @@ export async function saveGitHubConnection(
       });
       await r2Client.send(putCmd);
     } catch (r2Err: any) {
-      console.error('[GitHubServer] Error persisting credentials to R2 storage:', r2Err?.message || r2Err);
-      throw new Error(`Failed to securely persist GitHub credentials: ${r2Err?.message || 'Storage error'}`);
+      console.warn('[GitHubServer] Notice backing up credentials to R2:', r2Err?.message || r2Err);
     }
-  } else {
-    // Durable credential storage must be available in production serverless environments
-    console.error('[GitHubServer] Durable credential storage (Cloudflare R2) is not configured.');
-    throw new Error('Durable credential storage (R2) is not configured on the server. Please check R2 environment configuration.');
   }
 
   return record;
 }
 
 /**
- * Retrieve GitHub connection and credential for a user
+ * Retrieve GitHub connection and credential for a user using github_connection_secrets as persistent source of truth
  */
 export async function getGitHubConnection(userId: string): Promise<GitHubConnectionRecord | null> {
-  let knownToken = '';
-  let knownRefreshToken = '';
-  let tokenExpiresAt: number | undefined = undefined;
-  let githubUserId = 0;
-  let githubUsername = '';
-  let avatarUrl = '';
-  let scope = 'repo,read:user';
-  let dbRecordId: string | undefined = undefined;
-  let createdAt = new Date().toISOString();
+  const sb = getSupabaseServerClient();
+  let dbConnection: any = null;
+  let dbSecret: any = null;
 
-  // 1. Check in-memory cache
-  if (memoryConnections.has(userId)) {
-    const mem = memoryConnections.get(userId)!;
-    if (mem.accessToken && !mem.accessToken.includes(':')) {
-      knownToken = mem.accessToken;
-      knownRefreshToken = mem.refreshToken || '';
-      tokenExpiresAt = mem.expiresAt;
-      githubUserId = mem.githubUserId;
-      githubUsername = mem.githubUsername;
-      avatarUrl = mem.avatarUrl || '';
-      scope = mem.scope || scope;
-      dbRecordId = mem.id;
-      createdAt = mem.createdAt;
+  // 1. Fetch persistent connection metadata and secrets from Supabase
+  if (sb) {
+    try {
+      const [connRes, secRes] = await Promise.all([
+        sb
+          .from('github_connections')
+          .select('id, user_id, github_user_id, github_username, avatar_url, created_at, updated_at')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        sb
+          .from('github_connection_secrets')
+          .select('connection_id, user_id, encrypted_access_token, token_expires_at, refresh_token_encrypted, token_scopes, token_updated_at, created_at')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+
+      if (!connRes.error && connRes.data) {
+        dbConnection = connRes.data;
+      }
+      if (!secRes.error && secRes.data) {
+        dbSecret = secRes.data;
+      }
+    } catch (dbErr: any) {
+      console.warn('[GitHubServer] Database query notice for GitHub credentials:', dbErr.message);
     }
   }
 
-  // 2. Durable credential retrieval from private R2 storage (works reliably across Vercel invocations)
-  if (!knownToken) {
+  let decryptedToken = '';
+  let decryptedRefreshToken = '';
+
+  // 2. Decrypt token from github_connection_secrets (Persistent Source of Truth)
+  if (dbSecret?.encrypted_access_token) {
+    decryptedToken = decryptToken(dbSecret.encrypted_access_token);
+    if (dbSecret.refresh_token_encrypted) {
+      decryptedRefreshToken = decryptToken(dbSecret.refresh_token_encrypted);
+    }
+  }
+
+  // 3. Graceful fallback: check in-memory cache if secrets table was not yet populated
+  if (!decryptedToken && memoryConnections.has(userId)) {
+    const mem = memoryConnections.get(userId)!;
+    if (mem.accessToken && !mem.accessToken.includes(':')) {
+      decryptedToken = mem.accessToken;
+      decryptedRefreshToken = mem.refreshToken || '';
+    }
+  }
+
+  // 4. Graceful fallback: check R2 storage backup if DB secret was empty
+  if (!decryptedToken) {
     const r2Client = getR2Client();
     const r2Config = getR2Config();
     if (r2Client && r2Config.bucketName) {
@@ -731,161 +751,76 @@ export async function getGitHubConnection(userId: string): Promise<GitHubConnect
           }
           if (text) {
             const parsed = JSON.parse(text);
-            let decryptedToken = '';
             if (parsed.encryptedToken) {
               decryptedToken = decryptToken(parsed.encryptedToken);
             }
-            if (!decryptedToken && parsed.token) {
-              decryptedToken = decryptToken(parsed.token);
+            if (!decryptedToken && parsed.token && !parsed.token.includes(':')) {
+              decryptedToken = parsed.token;
             }
-            if (!decryptedToken && parsed.accessToken) {
-              decryptedToken = decryptToken(parsed.accessToken);
-            }
-
-            let decryptedRefreshToken = '';
             if (parsed.encryptedRefreshToken) {
               decryptedRefreshToken = decryptToken(parsed.encryptedRefreshToken);
-            } else if (parsed.refreshToken) {
-              decryptedRefreshToken = decryptToken(parsed.refreshToken);
-            }
-
-            if (decryptedToken && !decryptedToken.includes(':')) {
-              knownToken = decryptedToken;
-              knownRefreshToken = decryptedRefreshToken;
-              tokenExpiresAt = parsed.expiresAt;
-              githubUserId = parsed.githubUserId || githubUserId;
-              githubUsername = parsed.githubUsername || githubUsername;
-              avatarUrl = parsed.avatarUrl || avatarUrl;
-              scope = parsed.scope || scope;
-              createdAt = parsed.updatedAt || createdAt;
             }
           }
         }
       } catch {
-        // Not in R2 or not yet configured
+        // non-blocking
       }
     }
   }
 
-  // 3. Check local disk cache (fallback for local development)
-  if (!knownToken) {
-    const disk = readFromDisk(userId);
-    if (disk) {
-      let candidate = '';
-      if (disk.encryptedToken) candidate = decryptToken(disk.encryptedToken);
-      if (!candidate && disk.token) candidate = decryptToken(disk.token);
-      if (!candidate && disk.accessToken) candidate = decryptToken(disk.accessToken);
-      if (candidate && !candidate.includes(':')) {
-        knownToken = candidate;
-        knownRefreshToken = disk.encryptedRefreshToken ? decryptToken(disk.encryptedRefreshToken) : (disk.refreshToken || '');
-        tokenExpiresAt = disk.expiresAt;
-        githubUserId = disk.githubUserId || githubUserId;
-        githubUsername = disk.githubUsername || githubUsername;
-        avatarUrl = disk.avatarUrl || avatarUrl;
-        scope = disk.scope || scope;
-        createdAt = disk.updatedAt || createdAt;
-      }
-    }
+  // If token cannot be decrypted or recovered, gracefully return null
+  // Caller will request GitHub reconnection
+  if (!decryptedToken) {
+    return null;
   }
 
-  // Check if token is expiring and can be refreshed
-  if (knownToken && tokenExpiresAt && Date.now() >= tokenExpiresAt - 60000 && knownRefreshToken) {
+  let tokenExpiresAt = dbSecret?.token_expires_at
+    ? new Date(dbSecret.token_expires_at).getTime()
+    : undefined;
+
+  // Refresh expiring token if needed
+  if (tokenExpiresAt && Date.now() >= tokenExpiresAt - 60000 && decryptedRefreshToken) {
     try {
-      const refreshed = await refreshGitHubToken(knownRefreshToken);
-      knownToken = refreshed.accessToken;
-      if (refreshed.refreshToken) knownRefreshToken = refreshed.refreshToken;
+      const refreshed = await refreshGitHubToken(decryptedRefreshToken);
+      decryptedToken = refreshed.accessToken;
+      if (refreshed.refreshToken) decryptedRefreshToken = refreshed.refreshToken;
       if (refreshed.expiresIn) tokenExpiresAt = Date.now() + refreshed.expiresIn * 1000;
 
-      // Update R2 with refreshed credentials
-      const r2Client = getR2Client();
-      const r2Config = getR2Config();
-      if (r2Client && r2Config.bucketName) {
-        await r2Client.send(
-          new PutObjectCommand({
-            Bucket: r2Config.bucketName,
-            Key: `meta/github/${userId}/connection.json`,
-            Body: Buffer.from(
-              JSON.stringify({
-                userId,
-                githubUserId,
-                githubUsername,
-                avatarUrl,
-                encryptedToken: encryptToken(knownToken),
-                encryptedRefreshToken: knownRefreshToken ? encryptToken(knownRefreshToken) : undefined,
-                expiresAt: tokenExpiresAt,
-                scope,
-                updatedAt: new Date().toISOString(),
-              }),
-              'utf-8'
-            ),
-            ContentType: 'application/json',
+      // Update github_connection_secrets with refreshed token
+      if (sb) {
+        const encryptedNew = encryptToken(decryptedToken);
+        const encryptedNewRefresh = decryptedRefreshToken ? encryptToken(decryptedRefreshToken) : null;
+        await sb
+          .from('github_connection_secrets')
+          .update({
+            encrypted_access_token: encryptedNew,
+            refresh_token_encrypted: encryptedNewRefresh,
+            token_expires_at: tokenExpiresAt ? new Date(tokenExpiresAt).toISOString() : null,
+            token_updated_at: new Date().toISOString(),
           })
-        );
+          .eq('user_id', userId);
       }
     } catch (refErr) {
       console.warn('[GitHubServer] Failed to refresh expiring token:', refErr);
     }
   }
 
-  // 4. Query Supabase public.github_connections (schema: id, user_id, github_user_id, github_username, created_at)
-  const sb = getSupabaseServerClient();
-  let dbFound = false;
-  if (sb) {
-    try {
-      const { data, error } = await sb
-        .from('github_connections')
-        .select('id, user_id, github_user_id, github_username, created_at')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!error && data) {
-        dbFound = true;
-        dbRecordId = data.id;
-        githubUserId = data.github_user_id || githubUserId;
-        githubUsername = data.github_username || githubUsername;
-        createdAt = data.created_at || createdAt;
-      }
-    } catch (err: any) {
-      console.warn('[GitHubServer] Database read notice for github_connections:', err.message);
-    }
-  }
-
-  // CRITICAL: If no usable token was found, the credential cannot be used for GitHub operations.
-  // Never return a phantom connection object with an empty access token.
-  if (!knownToken) {
-    return null;
-  }
-
+  const githubUsername = dbConnection?.github_username || '';
   const record: GitHubConnectionRecord = {
-    id: dbRecordId,
+    id: dbConnection?.id,
     userId,
-    githubUserId,
+    githubUserId: dbConnection?.github_user_id || 0,
     githubUsername,
-    avatarUrl: avatarUrl || (githubUsername ? `https://github.com/${githubUsername}.png` : ''),
-    accessToken: knownToken,
-    refreshToken: knownRefreshToken || undefined,
+    avatarUrl: dbConnection?.avatar_url || (githubUsername ? `https://github.com/${githubUsername}.png` : ''),
+    accessToken: decryptedToken,
+    refreshToken: decryptedRefreshToken || undefined,
     expiresAt: tokenExpiresAt,
-    scope,
-    createdAt,
-    updatedAt: createdAt,
+    scope: dbSecret?.token_scopes || 'repo,read:user',
+    createdAt: dbConnection?.created_at || new Date().toISOString(),
+    updatedAt: dbSecret?.token_updated_at || dbConnection?.updated_at || new Date().toISOString(),
   };
 
   memoryConnections.set(userId, record);
-  saveToDisk(userId, {
-    userId,
-    githubUserId,
-    githubUsername,
-    avatarUrl: record.avatarUrl,
-    token: knownToken,
-    encryptedToken: encryptToken(knownToken),
-    refreshToken: knownRefreshToken,
-    expiresAt: tokenExpiresAt,
-    scope,
-    updatedAt: createdAt,
-  });
-
   return record;
 }
 
@@ -896,17 +831,20 @@ export async function disconnectGitHubConnection(userId: string): Promise<boolea
   memoryConnections.delete(userId);
   deleteFromDisk(userId);
 
-  // 1. Delete from Supabase
+  // 1. Delete from Supabase public.github_connection_secrets and public.github_connections
   const sb = getSupabaseServerClient();
   if (sb) {
     try {
-      await sb.from('github_connections').delete().eq('user_id', userId);
+      await Promise.all([
+        sb.from('github_connection_secrets').delete().eq('user_id', userId),
+        sb.from('github_connections').delete().eq('user_id', userId),
+      ]);
     } catch (err: any) {
-      console.warn('[GitHubServer] Database deletion notice for github_connections:', err.message);
+      console.warn('[GitHubServer] Database deletion notice for GitHub connection:', err.message);
     }
   }
 
-  // 2. Delete from R2
+  // 2. Delete from R2 backup
   const r2Client = getR2Client();
   const r2Config = getR2Config();
   if (r2Client && r2Config.bucketName) {

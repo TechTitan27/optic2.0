@@ -442,6 +442,7 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
               branch: deployBranch,
               owner: selectedRepo.owner.login,
               repo: selectedRepo.name,
+              gitRepo: repoFullName,
               projectSlug: newProject.slug,
               deploymentNote: `Initial deploy from ${repoFullName}@${deployBranch}`,
             }),
@@ -473,22 +474,46 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
               `Deployed ${deployData.fileCount} file(s) from ${repoFullName} (${deployBranch}) to production!`,
               'Deployment Live'
             );
-          } else if (deployData.error === 'GitHub authorization expired/reconnect GitHub') {
-            toast.error(
-              'GitHub authorization expired. Please reconnect your GitHub account.',
-              'GitHub Authorization Expired'
-            );
           } else {
-            toast.success(
-              `Project "${newProject.name}" connected to ${repoFullName} (${selectedBranch}).`,
-              'GitHub Project Configured'
-            );
+            if (deployData.deploymentId) {
+              initialDeployment = {
+                id: deployData.deploymentId,
+                projectId: newProject.id,
+                organizationId: currentOrg.id,
+                userId: user?.id,
+                projectName: newProject.name,
+                status: 'failed',
+                url: deployData.deploymentUrl || `https://${newProject.slug}.host.doy.best`,
+                deploymentUrl: deployData.deploymentUrl || `https://${newProject.slug}.host.doy.best`,
+                storagePath: `deployments/${currentOrg.id}/${newProject.id}/${deployData.deploymentId}`,
+                commitHash: deployData.commitSha || 'HEAD',
+                commitMessage: `Initial deploy from ${selectedRepo.name}@${deployBranch}`,
+                branch: deployBranch,
+                creator: activeCreator,
+                durationSeconds: 5,
+                environment: 'production',
+                createdAt: new Date().toISOString(),
+                completedAt: new Date().toISOString(),
+              };
+            }
+
+            if (deployData.error === 'GitHub authorization expired/reconnect GitHub') {
+              toast.error(
+                'GitHub authorization expired. Please reconnect your GitHub account.',
+                'GitHub Authorization Expired'
+              );
+            } else {
+              toast.error(
+                deployData.error || `Failed to deploy ${repoFullName}. Check deployment logs.`,
+                'Deployment Failed'
+              );
+            }
           }
         } catch (deployErr: any) {
-          console.warn('[NewProjectPage] Initial deploy background notice:', deployErr.message);
-          toast.success(
-            `Project "${newProject.name}" connected to ${repoFullName} (${selectedBranch}).`,
-            'GitHub Project Configured'
+          console.warn('[NewProjectPage] Initial deploy error:', deployErr.message);
+          toast.error(
+            deployErr?.message || 'Deployment error. Check GitHub repository connection.',
+            'Deployment Error'
           );
         }
 

@@ -565,6 +565,7 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
           projectSlug: selectedProject.slug,
           owner: selectedProject.gitOwner,
           repo: selectedProject.gitRepoName,
+          gitRepo: selectedProject.gitRepo,
           deploymentNote: deploymentNote.trim() || `GitHub Deploy (${selectedProject.gitBranch || 'main'})`,
         }),
       });
@@ -603,9 +604,12 @@ export const HostingInterface: React.FC<HostingInterfaceProps> = ({
       }, 1000);
     } catch (err: any) {
       console.error('GitHub deploy error:', err);
-      setDeployError(err?.message || 'Deployment failed. Check GitHub connection and network.');
-      addLocalLog(err?.message || 'Deployment error', 'error');
+      const errMsg = err?.message || 'Deployment failed. Check GitHub connection and network.';
+      setDeployError(errMsg);
+      addLocalLog(errMsg, 'error');
       setIsDeploying(false);
+      await loadProjectDetails();
+      toast.error(errMsg, 'Deployment Failed');
     }
   };
 

@@ -237,41 +237,7 @@ export async function resolveProductionDeploymentId(
   const r2Client = options?.r2Client || getR2Client();
   const r2Config = options?.r2Config || getR2Config();
 
-  // 1. Check R2 for explicit production pointer
-  if (r2Client && r2Config.bucketName) {
-    try {
-      const getCmd = new GetObjectCommand({
-        Bucket: r2Config.bucketName,
-        Key: `projects/${clean}/production.json`,
-      });
-      const res = await r2Client.send(getCmd);
-      if (res.Body) {
-        let text = '';
-        if (typeof (res.Body as any).transformToString === 'function') {
-          text = await (res.Body as any).transformToString('utf-8');
-        } else if (typeof (res.Body as any).transformToByteArray === 'function') {
-          const bytes = await (res.Body as any).transformToByteArray();
-          text = Buffer.from(bytes).toString('utf-8');
-        }
-        if (text) {
-          const parsed = JSON.parse(text);
-          if (parsed?.productionDeploymentId) {
-            console.log('[HOSTNAME_RESOLVE_STEP]', {
-              step: 'found_in_r2_pointer',
-              target: clean,
-              deploymentId: parsed.productionDeploymentId,
-            });
-            setProductionDeployment(parsed.projectId || clean, parsed.productionDeploymentId, clean);
-            return parsed.productionDeploymentId;
-          }
-        }
-      }
-    } catch {
-      // Pointer file not present in R2
-    }
-  }
-
-  // 2. Query Supabase for project and its latest ready deployment
+  // 1. Query Supabase for project and its latest ready deployment (Persistent Source of Truth)
   const sb = options?.supabase || getSupabaseServerClient();
   if (sb) {
     try {
@@ -282,7 +248,7 @@ export async function resolveProductionDeploymentId(
       } else {
         query = query.ilike('slug', clean);
       }
-      const { data: proj, error: projErr } = await query.maybeSingle();
+      const { data: proj, error: projErr } = await query.limit(1).maybeSingle();
 
       if (projErr) {
         console.warn('[HOSTNAME_RESOLVE_STEP]', {
@@ -300,7 +266,7 @@ export async function resolveProductionDeploymentId(
           name: proj.name,
         });
 
-        // Query latest ready deployment
+        // Query latest ready deployment from public.deployments
         const { data: dep, error: depErr } = await sb
           .from('deployments')
           .select('id, status, storage_path, organization_id, project_id, created_at, completed_at')
@@ -351,6 +317,40 @@ export async function resolveProductionDeploymentId(
       }
     } catch (err: any) {
       console.warn('[Optic Hosting] Production deployment lookup notice:', err.message);
+    }
+  }
+
+  // 2. Check R2 for explicit production pointer (fallback)
+  if (r2Client && r2Config.bucketName) {
+    try {
+      const getCmd = new GetObjectCommand({
+        Bucket: r2Config.bucketName,
+        Key: `projects/${clean}/production.json`,
+      });
+      const res = await r2Client.send(getCmd);
+      if (res.Body) {
+        let text = '';
+        if (typeof (res.Body as any).transformToString === 'function') {
+          text = await (res.Body as any).transformToString('utf-8');
+        } else if (typeof (res.Body as any).transformToByteArray === 'function') {
+          const bytes = await (res.Body as any).transformToByteArray();
+          text = Buffer.from(bytes).toString('utf-8');
+        }
+        if (text) {
+          const parsed = JSON.parse(text);
+          if (parsed?.productionDeploymentId) {
+            console.log('[HOSTNAME_RESOLVE_STEP]', {
+              step: 'found_in_r2_pointer',
+              target: clean,
+              deploymentId: parsed.productionDeploymentId,
+            });
+            setProductionDeployment(parsed.projectId || clean, parsed.productionDeploymentId, clean);
+            return parsed.productionDeploymentId;
+          }
+        }
+      }
+    } catch {
+      // Pointer file not present in R2
     }
   }
 
@@ -418,7 +418,7 @@ export async function resolveRequestTarget(
     rawSubpath = rawSubpath.replace(/^\/+/, '');
 
     // Strip leading subdomain prefix if rewritten internally to /api/deployments/:subdomain/...
-    if (rawSubpath === subdomain) {
+    if (rawSubpath === subdomain || rawSubpath === `${subdomain}/`) {
       rawSubpath = '';
     } else if (rawSubpath.startsWith(`${subdomain}/`)) {
       rawSubpath = rawSubpath.slice(subdomain.length + 1).replace(/^\/+/, '');
