@@ -1726,35 +1726,13 @@ export async function handleApiRequest(
         branch: targetBranch,
       });
 
-      // 1. Fetch the selected branch's ENTIRE repository recursively (preserving all relative paths)
-      const { files, commitSha } = await fetchRepositoryContentsRecursive(
-        connection.accessToken,
-        owner,
-        repoName,
-        targetBranch
-      );
-
-      if (!files || files.length === 0) {
-        return sendJson(res, 400, {
-          success: false,
-          error: `No files found in GitHub repository ${owner}/${repoName} on branch "${targetBranch}".`,
-        });
-      }
-
-      console.log('[GITHUB_DEPLOY_RECURSIVE_EXTRACTED]', {
-        totalFiles: files.length,
-        commitSha,
-        hasIndexHtml: files.some((f) => f.relativePath === 'index.html'),
-        fileSample: files.slice(0, 8).map((f) => f.relativePath),
-      });
-
-      // 2. Generate deployment ID and storage path
+      // 1. Generate deployment ID and storage path immediately
       const deploymentId = crypto.randomUUID();
       activeDeploymentId = deploymentId;
       const storagePath = `deployments/${orgId}/${projectId}/${deploymentId}`;
       const deploymentUrl = `https://${projectSlug}.host.doy.best`;
 
-      // 3. Create initial deployment record in public.deployments
+      // 2. Create initial deployment record in public.deployments
       if (sb) {
         try {
           const isUuid = (val: any) =>
@@ -1804,6 +1782,36 @@ export async function handleApiRequest(
               level: 'info',
               created_at: new Date().toISOString(),
             },
+          ]);
+        } catch (dbErr: any) {
+          console.warn('[GITHUB_DEPLOY] DB insert notice:', dbErr.message);
+        }
+      }
+
+      // 3. Fetch the selected branch's ENTIRE repository recursively (preserving all relative paths)
+      const { files, commitSha } = await fetchRepositoryContentsRecursive(
+        connection.accessToken,
+        owner,
+        repoName,
+        targetBranch
+      );
+
+      if (!files || files.length === 0) {
+        throw new Error(
+          `No files found in GitHub repository ${owner}/${repoName} on branch "${targetBranch}".`
+        );
+      }
+
+      console.log('[GITHUB_DEPLOY_RECURSIVE_EXTRACTED]', {
+        totalFiles: files.length,
+        commitSha,
+        hasIndexHtml: files.some((f) => f.relativePath === 'index.html'),
+        fileSample: files.slice(0, 8).map((f) => f.relativePath),
+      });
+
+      if (sb) {
+        try {
+          await sb.from('deployment_logs').insert([
             {
               deployment_id: deploymentId,
               message: `Fetched ${files.length} repository file(s) from branch "${targetBranch}" (commit: ${commitSha || 'HEAD'})`,
@@ -1812,7 +1820,7 @@ export async function handleApiRequest(
             },
           ]);
         } catch (dbErr: any) {
-          console.warn('[GITHUB_DEPLOY] DB insert notice:', dbErr.message);
+          console.warn('[GITHUB_DEPLOY] DB log insert notice:', dbErr.message);
         }
       }
 

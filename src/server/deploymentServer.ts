@@ -507,6 +507,23 @@ export async function resolveRequestTarget(
 
   rawSubpath = rawSubpath.replace(/^\/+/, '');
 
+  // If deploymentId is provided but is not a UUID and not in memory cache, resolve as project slug
+  if (deploymentId) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deploymentId);
+    if (!isUuid && !getCachedDeployment(deploymentId)) {
+      const prodDepId = await resolveProductionDeploymentId(deploymentId, options);
+      if (prodDepId) {
+        return {
+          deploymentId: prodDepId,
+          rawSubpath,
+          rawUrl: candidate || reqUrl,
+          isHostRouting: true,
+          projectSlug: deploymentId,
+        };
+      }
+    }
+  }
+
   return {
     deploymentId,
     rawSubpath,

@@ -9,7 +9,7 @@
           "value": "(?<slug>[^.]+)\\.host.*"
         }
       ],
-      "destination": "/api/deployments?deploymentId=:slug"
+      "destination": "/api/deployments?project=:slug&deploymentId=:slug"
     },
     {
       "source": "/:subpath*",
@@ -19,7 +19,7 @@
           "value": "(?<slug>[^.]+)\\.host.*"
         }
       ],
-      "destination": "/api/deployments?deploymentId=:slug&subpath=:subpath*"
+      "destination": "/api/deployments?project=:slug&deploymentId=:slug&subpath=:subpath*"
     },
     {
       "source": "/api/health",
