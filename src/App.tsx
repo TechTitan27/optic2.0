@@ -28,6 +28,77 @@ import { PublicSharePage } from './components/share/PublicSharePage';
 import { NotFoundPage } from './components/common/NotFoundPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
+function EdgeDeploymentView() {
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchEdgeSite = async () => {
+      try {
+        const host = window.location.hostname.toLowerCase();
+        const match = host.match(/^([a-z0-9_-]+)\.host(?:\..+)?$/i);
+        const slug = match ? match[1] : '';
+        const path = window.location.pathname.replace(/^\/+/, '');
+        const targetUrl = slug
+          ? `/api/deployments?project=${encodeURIComponent(slug)}${path ? `&subpath=${encodeURIComponent(path)}` : ''}`
+          : window.location.pathname;
+
+        const res = await fetch(targetUrl, {
+          headers: {
+            'x-forwarded-host': window.location.host,
+          },
+        });
+
+        if (cancelled) return;
+
+        if (res.ok) {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('text/html')) {
+            const html = await res.text();
+            document.open();
+            document.write(html);
+            document.close();
+            return;
+          }
+        }
+        const text = await res.text().catch(() => '');
+        setErrorMsg(text || `Edge deployment returned status ${res.status}`);
+      } catch (err: any) {
+        if (!cancelled) {
+          setErrorMsg(err?.message || 'Failed to connect to edge network');
+        }
+      }
+    };
+
+    fetchEdgeSite();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-[#09090b] text-[#f4f4f5] flex items-center justify-center font-sans p-6">
+      <div className="text-center max-w-md p-8 bg-[#18181b] border border-[#27272a] rounded-xl shadow-2xl">
+        <div className="w-10 h-10 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto mb-4 font-bold animate-pulse">
+          ⚡
+        </div>
+        <h2 className="text-lg font-semibold text-white mb-2">
+          {errorMsg ? 'Deployment Notice' : 'Connecting to Edge Deployment'}
+        </h2>
+        <p className="text-xs text-zinc-400 leading-relaxed mb-4">
+          {errorMsg || 'Routing website assets from the Optic Cloud Edge Network...'}
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium cursor-pointer transition-colors"
+        >
+          Reload Page
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MainApp() {
   const { user } = useAuth();
 
@@ -38,25 +109,7 @@ function MainApp() {
       window.location.pathname.startsWith('/api/deployments') ||
       window.location.pathname.includes('/api/deployments/'))
   ) {
-    return (
-      <div className="min-h-screen bg-[#09090b] text-[#f4f4f5] flex items-center justify-center font-sans p-6">
-        <div className="text-center max-w-md p-8 bg-[#18181b] border border-[#27272a] rounded-xl shadow-2xl">
-          <div className="w-10 h-10 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto mb-4 font-bold">
-            ⚡
-          </div>
-          <h2 className="text-lg font-semibold text-white mb-2">Connecting to Edge Deployment</h2>
-          <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-            Routing website assets from the Optic Cloud Edge Network...
-          </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium cursor-pointer transition-colors"
-          >
-            Reload Page
-          </button>
-        </div>
-      </div>
-    );
+    return <EdgeDeploymentView />;
   }
 
   // 1. Initial surface detection with hostname as primary source of truth
