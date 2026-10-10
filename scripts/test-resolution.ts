@@ -287,6 +287,148 @@ async function testDeploymentDirectResolution() {
     console.log('✔ Test 10: Incomplete deployment blocked from public access.');
   }
 
+  // 11. Host *.host.optic.doy.best directly
+  console.log('Test 11: Direct access on *.host.optic.doy.best with query strings');
+  {
+    const { req, res, getResponse } = createMockHttp({
+      url: '/?ref=producthunt&theme=dark',
+      headers: {
+        host: 'formylove.host.optic.doy.best',
+        'x-forwarded-host': 'formylove.host.optic.doy.best',
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 200);
+    assert(resp.headers['content-type']?.includes('text/html'));
+    assert(resp.body.includes('Live Ewura Archive'));
+    console.log('✔ Test 11: Host formylove.host.optic.doy.best served deployed HTML directly.');
+  }
+
+  // 12. Nested SPA route with trailing slash (/about/team/)
+  console.log('Test 12: Nested SPA route with trailing slash (/about/team/)');
+  {
+    const { req, res, getResponse } = createMockHttp({
+      url: '/api/deployments?project=formylove&subpath=about/team/',
+      headers: {
+        host: 'formylove.host.optic.doy.best',
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 200);
+    assert(resp.headers['content-type']?.includes('text/html'));
+    assert(resp.body.includes('Live Ewura Archive'));
+    console.log('✔ Test 12: Nested SPA route with trailing slash fell back to index.html.');
+  }
+
+  // 13. Unknown project returns clear 404, never platform landing page
+  console.log('Test 13: Unknown project returns 404 diagnostic page');
+  {
+    const { req, res, getResponse } = createMockHttp({
+      url: '/api/deployments?project=nonexistent-ghost-project',
+      headers: {
+        host: 'nonexistent-ghost-project.host.optic.doy.best',
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 404);
+    assert(resp.body.includes('No Production Deployment') || resp.body.includes('not have an active production deployment'));
+    assert(!resp.body.includes('Optic Cloud Platform'));
+    console.log('✔ Test 13: Unknown project returned clear 404 diagnostic page.');
+  }
+
+  // 14. Deployment UUID resolves only that specific deployment
+  console.log('Test 14: Deployment UUID resolves only that specific deployment');
+  {
+    const v1DepId = '11111111-aaaa-bbbb-cccc-111111111111';
+    const v2DepId = '22222222-aaaa-bbbb-cccc-222222222222';
+
+    cacheDeploymentRecord({
+      id: v1DepId,
+      project_id: 'proj_multi',
+      organization_id: 'org_default',
+      status: 'ready',
+      storage_path: `deployments/org_default/proj_multi/${v1DepId}`,
+      createdAt: 1000,
+    });
+    storeMemoryDeploymentFile(v1DepId, 'index.html', Buffer.from('<h1>Version 1 HTML</h1>'), 'text/html; charset=utf-8');
+
+    cacheDeploymentRecord({
+      id: v2DepId,
+      project_id: 'proj_multi',
+      organization_id: 'org_default',
+      status: 'ready',
+      storage_path: `deployments/org_default/proj_multi/${v2DepId}`,
+      createdAt: 2000,
+    });
+    storeMemoryDeploymentFile(v2DepId, 'index.html', Buffer.from('<h1>Version 2 HTML</h1>'), 'text/html; charset=utf-8');
+
+    // Project latest is v2
+    setProductionDeployment('proj_multi', v2DepId, 'multi-version');
+
+    // Requesting v1 specifically must return Version 1 HTML, NOT v2
+    const { req, res, getResponse } = createMockHttp({
+      url: `/api/deployments?deploymentId=${v1DepId}`,
+      headers: {
+        host: `${v1DepId}.host.optic.doy.best`,
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 200);
+    assert(resp.body.includes('Version 1 HTML'));
+    assert(!resp.body.includes('Version 2 HTML'));
+    console.log('✔ Test 14: Immutable deployment UUID resolved only that specific deployment.');
+  }
+
+  // 15. Non-hosted domains pass through to normal Optic app
+  console.log('Test 15: Main domain and hosting.optic.doy.best pass through to Optic app');
+  {
+    const { handleApiRequest } = await import('../src/server/apiHandler.js');
+    let hostingPassedThrough = false;
+    const { req: hostingReq, res: hostingRes } = createMockHttp({
+      url: '/',
+      headers: {
+        host: 'hosting.optic.doy.best',
+      },
+    });
+    handleApiRequest(hostingReq, hostingRes, () => {
+      hostingPassedThrough = true;
+    });
+    assert.strictEqual(hostingPassedThrough, true, 'hosting.optic.doy.best should pass through to Optic app');
+
+    let mainPassedThrough = false;
+    const { req: mainReq, res: mainRes } = createMockHttp({
+      url: '/dashboard',
+      headers: {
+        host: 'optic.doy.best',
+      },
+    });
+    handleApiRequest(mainReq, mainRes, () => {
+      mainPassedThrough = true;
+    });
+    assert.strictEqual(mainPassedThrough, true, 'optic.doy.best should pass through to Optic app');
+    console.log('✔ Test 15: Main Optic domain and hosting.optic.doy.best continue to render normally.');
+  }
+
+  // 16. Missing asset with query params returns 404, not index.html
+  console.log('Test 16: Missing asset with query params returns 404');
+  {
+    const { req, res, getResponse } = createMockHttp({
+      url: '/api/deployments?project=formylove&subpath=assets/nonexistent.js&v=1.2.3',
+      headers: {
+        host: 'formylove.host.optic.doy.best',
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 404);
+    assert(!resp.body.includes('Live Ewura Archive'));
+    console.log('✔ Test 16: Missing asset with query params returned 404.');
+  }
+
   console.log('\n=== ALL RESOLUTION TESTS PASSED! ===');
 }
 

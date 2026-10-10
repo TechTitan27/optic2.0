@@ -165,7 +165,8 @@ export async function handleApiRequest(
     hostHeader.includes('.host.') ||
     hostHeader.endsWith('.host.doy.best') ||
     hostHeader.endsWith('.host.optic.doy.best') ||
-    hostHeader.endsWith('.host.localhost');
+    hostHeader.endsWith('.host.localhost') ||
+    /^([a-z0-9_-]+)\.host(?:\..+)?$/i.test(hostHeader);
 
   if (
     isDeployedHost ||

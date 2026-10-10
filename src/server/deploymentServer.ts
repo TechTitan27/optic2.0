@@ -134,10 +134,17 @@ export function sendHtmlPage(res: ServerResponse, statusCode: number, title: str
 </html>`);
 }
 
-function isSpaCandidate(subpath: string): boolean {
-  if (!subpath || subpath === 'index.html') return false;
-  const lastSegment = subpath.split('/').pop() || '';
-  if (lastSegment.includes('.')) {
+function isSpaCandidate(subpath: string, originalSubpath?: string): boolean {
+  const pathToCheck = (originalSubpath || subpath || '').replace(/\/+$/, '').trim();
+  if (!pathToCheck || pathToCheck === 'index.html') return false;
+  const normalized = pathToCheck.replace(/\/index\.html$/i, '');
+  if (!normalized) return false;
+  const lastSegment = normalized.split('/').pop() || '';
+  if (
+    /\.(?:js|mjs|cjs|jsx|ts|tsx|css|png|jpg|jpeg|gif|svg|ico|webp|avif|woff|woff2|ttf|otf|eot|map|json|xml|txt|pdf|zip|wasm)$/i.test(
+      lastSegment
+    )
+  ) {
     return false;
   }
   return true;
@@ -924,7 +931,7 @@ export async function handleDeploymentRequest(
   // 6. Check Cloudflare R2 Client Check
   if (!r2Client || !r2Config.bucketName || !r2Config.isConfigured) {
     // If not in memory and R2 not configured: check SPA fallback
-    if (isSpaCandidate(targetRelative)) {
+    if (isSpaCandidate(targetRelative, decodedSubpath)) {
       const memIndex = getMemoryDeploymentFile(deployment.id, 'index.html');
       if (memIndex) {
         res.statusCode = 200;
@@ -1048,7 +1055,7 @@ export async function handleDeploymentRequest(
 
     if (isNotFound) {
       // SPA Fallback for extensionless client-side routes
-      if (isSpaCandidate(targetRelative)) {
+      if (isSpaCandidate(targetRelative, decodedSubpath)) {
         try {
           const indexKey = deployment.storage_path
             ? `${deployment.storage_path.replace(/\/+$/, '')}/index.html`
