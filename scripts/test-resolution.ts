@@ -216,6 +216,77 @@ async function testDeploymentDirectResolution() {
     console.log('✔ Test 7: Direct path /api/deployments/formylove/ served index.html.');
   }
 
+  // 8. Vercel rewrite passing project and deploymentId simultaneously
+  console.log('Test 8: Vercel rewrite with project=:slug&deploymentId=:slug');
+  {
+    const { req, res, getResponse } = createMockHttp({
+      url: '/api/deployments?project=formylove&deploymentId=formylove',
+      headers: {
+        host: 'formylove.host.doy.best',
+        'x-forwarded-host': 'formylove.host.doy.best',
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 200);
+    assert(resp.headers['content-type']?.includes('text/html'));
+    assert(resp.body.includes('Live Ewura Archive'));
+    console.log('✔ Test 8: Handled dual project and deploymentId params without loop or error.');
+  }
+
+  // 9. Case-insensitive status check ('READY')
+  console.log('Test 9: Case-insensitive status check (status: READY)');
+  {
+    const uppercaseDepId = '99999999-aaaa-bbbb-cccc-dddddddddddd';
+    cacheDeploymentRecord({
+      id: uppercaseDepId,
+      project_id: 'proj_formylove',
+      organization_id: 'org_default',
+      status: 'READY',
+      storage_path: `deployments/org_default/proj_formylove/${uppercaseDepId}`,
+      createdAt: Date.now(),
+    });
+    storeMemoryDeploymentFile(uppercaseDepId, 'index.html', Buffer.from('<h1>Uppercase READY</h1>'), 'text/html; charset=utf-8');
+
+    const { req, res, getResponse } = createMockHttp({
+      url: `/api/deployments?deploymentId=${uppercaseDepId}`,
+      headers: {
+        host: `${uppercaseDepId}.host.doy.best`,
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 200);
+    assert(resp.body.includes('Uppercase READY'));
+    console.log('✔ Test 9: Case-insensitive status READY served successfully.');
+  }
+
+  // 10. Incomplete deployment guard (status: 'building' returns 404)
+  console.log('Test 10: Incomplete deployment guard (status: building returns 404)');
+  {
+    const buildingDepId = '11111111-2222-3333-4444-555555555555';
+    cacheDeploymentRecord({
+      id: buildingDepId,
+      project_id: 'proj_formylove',
+      organization_id: 'org_default',
+      status: 'building',
+      storage_path: `deployments/org_default/proj_formylove/${buildingDepId}`,
+      createdAt: Date.now(),
+    });
+
+    const { req, res, getResponse } = createMockHttp({
+      url: `/api/deployments?deploymentId=${buildingDepId}`,
+      headers: {
+        host: `${buildingDepId}.host.doy.best`,
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 404);
+    assert(resp.body.includes('Deployment Not Ready'));
+    console.log('✔ Test 10: Incomplete deployment blocked from public access.');
+  }
+
   console.log('\n=== ALL RESOLUTION TESTS PASSED! ===');
 }
 

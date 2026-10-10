@@ -242,6 +242,35 @@ export async function resolveProductionDeploymentId(
   if (sb) {
     try {
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean);
+
+      // If clean is already an immutable deployment UUID, check deployments table directly
+      if (isUuid) {
+        const { data: directDep } = await sb
+          .from('deployments')
+          .select('id, status, storage_path, organization_id, project_id')
+          .eq('id', clean)
+          .maybeSingle();
+
+        if (directDep && ['ready', 'READY', 'Ready'].includes(directDep.status)) {
+          console.log('[HOSTNAME_RESOLVE_STEP]', {
+            step: 'found_direct_deployment_uuid',
+            deploymentId: directDep.id,
+            status: directDep.status,
+          });
+          cacheDeploymentRecord({
+            id: directDep.id,
+            project_id: directDep.project_id,
+            organization_id: directDep.organization_id,
+            status: 'ready',
+            storage_path:
+              directDep.storage_path ||
+              `deployments/${directDep.organization_id}/${directDep.project_id}/${directDep.id}`,
+            createdAt: Date.now(),
+          });
+          return directDep.id;
+        }
+      }
+
       let query = sb.from('projects').select('id, organization_id, slug, name');
       if (isUuid) {
         query = query.or(`slug.ilike.${clean},id.eq.${clean}`);
@@ -470,9 +499,37 @@ export async function resolveRequestTarget(
     console.log('[HOSTNAME_RESOLVE_STEP]', {
       step: 'vercel_rewrite_query_match',
       projectParam: cleanProject,
+      depIdParam,
       rawSubpath,
       url: reqUrl,
     });
+
+    // If depIdParam is a valid UUID or cached deployment ID, use it directly
+    if (depIdParam && !depIdParam.startsWith(':')) {
+      const isDepUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(depIdParam);
+      if (isDepUuid || getCachedDeployment(depIdParam)) {
+        return {
+          deploymentId: depIdParam,
+          rawSubpath,
+          rawUrl: reqUrl,
+          isHostRouting: true,
+          projectSlug: cleanProject,
+        };
+      }
+    }
+
+    // If cleanProject is itself a UUID or cached deployment ID, use it directly
+    const isProjUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanProject);
+    if (isProjUuid && getCachedDeployment(cleanProject)) {
+      return {
+        deploymentId: cleanProject,
+        rawSubpath,
+        rawUrl: reqUrl,
+        isHostRouting: true,
+        projectSlug: cleanProject,
+      };
+    }
+
     const prodDepId = await resolveProductionDeploymentId(cleanProject, options);
     return {
       deploymentId: prodDepId || '',
@@ -796,7 +853,8 @@ export async function handleDeploymentRequest(
   }
 
   // 3. Verify deployment status is ready
-  if (deployment.status !== 'ready') {
+  const normalizedStatus = (deployment.status || '').toLowerCase().trim();
+  if (normalizedStatus !== 'ready') {
     console.error('[DEPLOYMENT_SERVE_FAILED]', {
       deploymentId,
       status: deployment.status,
