@@ -34,7 +34,8 @@ function EdgeDeploymentView() {
 
   useEffect(() => {
     const hostMatch = window.location.hostname.match(/^([a-z0-9_-]+)\.host/i);
-    const slug = hostMatch ? hostMatch[1] : '';
+    const pathMatch = window.location.pathname.match(/^\/api\/deployments\/([^/]+)/);
+    const slug = hostMatch ? hostMatch[1] : (pathMatch ? pathMatch[1] : '');
 
     if (!slug) {
       setStatus('not-found');
@@ -42,19 +43,30 @@ function EdgeDeploymentView() {
       return;
     }
 
-    // Attempt a direct check against the deployment resolution endpoint
     let isMounted = true;
-    const checkDeployment = async () => {
+    const loadDeployment = async () => {
       try {
-        const testUrl = `/api/deployments?project=${encodeURIComponent(slug)}`;
-        const res = await fetch(testUrl, { method: 'HEAD' });
+        const rawSubpath = hostMatch
+          ? window.location.pathname.replace(/^\/+/, '')
+          : window.location.pathname.replace(new RegExp(`^/api/deployments/${slug}/?`), '');
+        const search = window.location.search;
+        const targetUrl = rawSubpath
+          ? `/api/deployments?project=${encodeURIComponent(slug)}&subpath=${encodeURIComponent(rawSubpath + search)}`
+          : `/api/deployments?project=${encodeURIComponent(slug)}`;
+
+        const res = await fetch(targetUrl);
 
         if (!isMounted) return;
 
         if (res.ok) {
-          // Deployment is ready on the edge: perform clean hard navigation to serve content directly
-          window.location.reload();
-          return;
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('text/html')) {
+            const html = await res.text();
+            document.open();
+            document.write(html);
+            document.close();
+            return;
+          }
         }
 
         if (res.status === 404) {
@@ -71,7 +83,7 @@ function EdgeDeploymentView() {
       }
     };
 
-    checkDeployment();
+    loadDeployment();
     return () => {
       isMounted = false;
     };

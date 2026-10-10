@@ -180,6 +180,42 @@ async function testDeploymentDirectResolution() {
     console.log('✔ Test 5: Missing asset correctly returned 404 (not index.html).');
   }
 
+  // 6. Request with subpath=api/deployments stripped cleanly to root
+  console.log('Test 6: Request with subpath=api/deployments stripped to index.html');
+  {
+    const { req, res, getResponse } = createMockHttp({
+      url: '/api/deployments?project=formylove&subpath=api/deployments',
+      headers: {
+        host: 'formylove.host.doy.best',
+        'x-forwarded-host': 'formylove.host.doy.best',
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 200);
+    assert(resp.headers['content-type']?.includes('text/html'));
+    assert(resp.body.includes('Live Ewura Archive'));
+    console.log('✔ Test 6: Cleanly stripped internal api/deployments subpath to index.html.');
+  }
+
+  // 7. Direct path resolution /api/deployments/formylove/
+  console.log('Test 7: Direct path resolution /api/deployments/formylove/');
+  {
+    const { req, res, getResponse } = createMockHttp({
+      url: '/api/deployments/formylove/',
+      headers: {
+        host: 'hosting.optic.doy.best',
+        'x-forwarded-host': 'hosting.optic.doy.best',
+      },
+    });
+    await handleDeploymentRequest(req, res);
+    const resp = getResponse();
+    assert.strictEqual(resp.statusCode, 200);
+    assert(resp.headers['content-type']?.includes('text/html'));
+    assert(resp.body.includes('Live Ewura Archive'));
+    console.log('✔ Test 7: Direct path /api/deployments/formylove/ served index.html.');
+  }
+
   console.log('\n=== ALL RESOLUTION TESTS PASSED! ===');
 }
 

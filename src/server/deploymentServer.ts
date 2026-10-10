@@ -422,6 +422,12 @@ export async function resolveRequestTarget(
       rawSubpath = rawSubpath.slice(subdomain.length + 1).replace(/^\/+/, '');
     }
 
+    if (rawSubpath === 'api/deployments' || rawSubpath === 'api/deployments/') {
+      rawSubpath = '';
+    } else if (rawSubpath.startsWith('api/deployments/')) {
+      rawSubpath = rawSubpath.slice('api/deployments/'.length).replace(/^\/+/, '');
+    }
+
     console.log('[HOSTNAME_RESOLVE_STEP]', {
       step: 'wildcard_host_match',
       host,
@@ -455,7 +461,12 @@ export async function resolveRequestTarget(
   // 2. Check for explicit query-based rewrite: ?project=:project&subpath=:subpath
   if (projectParam && !projectParam.startsWith(':')) {
     const cleanProject = projectParam.toLowerCase().trim();
-    const rawSubpath = resolveSubpath();
+    let rawSubpath = resolveSubpath();
+    if (rawSubpath === 'api/deployments' || rawSubpath === 'api/deployments/') {
+      rawSubpath = '';
+    } else if (rawSubpath.startsWith('api/deployments/')) {
+      rawSubpath = rawSubpath.slice('api/deployments/'.length).replace(/^\/+/, '');
+    }
     console.log('[HOSTNAME_RESOLVE_STEP]', {
       step: 'vercel_rewrite_query_match',
       projectParam: cleanProject,
