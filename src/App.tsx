@@ -29,71 +29,84 @@ import { NotFoundPage } from './components/common/NotFoundPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 function EdgeDeploymentView() {
+  const [status, setStatus] = useState<'checking' | 'error' | 'not-found'>('checking');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    const fetchEdgeSite = async () => {
+    const hostMatch = window.location.hostname.match(/^([a-z0-9_-]+)\.host/i);
+    const slug = hostMatch ? hostMatch[1] : '';
+
+    if (!slug) {
+      setStatus('not-found');
+      setErrorMsg('Invalid edge deployment hostname.');
+      return;
+    }
+
+    // Attempt a direct check against the deployment resolution endpoint
+    let isMounted = true;
+    const checkDeployment = async () => {
       try {
-        const host = window.location.hostname.toLowerCase();
-        const match = host.match(/^([a-z0-9_-]+)\.host(?:\..+)?$/i);
-        const slug = match ? match[1] : '';
-        const path = window.location.pathname.replace(/^\/+/, '');
-        const targetUrl = slug
-          ? `/api/deployments?project=${encodeURIComponent(slug)}${path ? `&subpath=${encodeURIComponent(path)}` : ''}`
-          : window.location.pathname;
+        const testUrl = `/api/deployments?project=${encodeURIComponent(slug)}`;
+        const res = await fetch(testUrl, { method: 'HEAD' });
 
-        const res = await fetch(targetUrl, {
-          headers: {
-            'x-forwarded-host': window.location.host,
-          },
-        });
-
-        if (cancelled) return;
+        if (!isMounted) return;
 
         if (res.ok) {
-          const contentType = res.headers.get('content-type') || '';
-          if (contentType.includes('text/html')) {
-            const html = await res.text();
-            document.open();
-            document.write(html);
-            document.close();
-            return;
-          }
+          // Deployment is ready on the edge: perform clean hard navigation to serve content directly
+          window.location.reload();
+          return;
         }
-        const text = await res.text().catch(() => '');
-        setErrorMsg(text || `Edge deployment returned status ${res.status}`);
+
+        if (res.status === 404) {
+          setStatus('not-found');
+          setErrorMsg(`Project "${slug}" does not have an active production deployment yet.`);
+        } else {
+          setStatus('error');
+          setErrorMsg(`Unable to load edge deployment (HTTP ${res.status}).`);
+        }
       } catch (err: any) {
-        if (!cancelled) {
-          setErrorMsg(err?.message || 'Failed to connect to edge network');
-        }
+        if (!isMounted) return;
+        setStatus('error');
+        setErrorMsg(err?.message || 'Network error reaching edge deployment.');
       }
     };
 
-    fetchEdgeSite();
+    checkDeployment();
     return () => {
-      cancelled = true;
+      isMounted = false;
     };
   }, []);
 
   return (
     <div className="min-h-screen bg-[#09090b] text-[#f4f4f5] flex items-center justify-center font-sans p-6">
       <div className="text-center max-w-md p-8 bg-[#18181b] border border-[#27272a] rounded-xl shadow-2xl">
-        <div className="w-10 h-10 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto mb-4 font-bold animate-pulse">
-          ⚡
+        <div className={`w-10 h-10 rounded-full flex items-center justify-center mx-auto mb-4 font-bold ${
+          status === 'checking'
+            ? 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 animate-pulse'
+            : 'bg-amber-500/10 border border-amber-500/20 text-amber-400'
+        }`}>
+          {status === 'checking' ? '⚡' : '⚠️'}
         </div>
         <h2 className="text-lg font-semibold text-white mb-2">
-          {errorMsg ? 'Deployment Notice' : 'Connecting to Edge Deployment'}
+          {status === 'checking' ? 'Connecting to Edge Deployment' : 'Deployment Notice'}
         </h2>
-        <p className="text-xs text-zinc-400 leading-relaxed mb-4">
+        <p className="text-xs text-zinc-400 leading-relaxed mb-5">
           {errorMsg || 'Routing website assets from the Optic Cloud Edge Network...'}
         </p>
-        <button
-          onClick={() => window.location.reload()}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium cursor-pointer transition-colors"
-        >
-          Reload Page
-        </button>
+        <div className="flex items-center justify-center gap-3">
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium cursor-pointer transition-colors"
+          >
+            Reload Page
+          </button>
+          <a
+            href="https://hosting.optic.doy.best/dashboard"
+            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-medium transition-colors"
+          >
+            Go to Dashboard
+          </a>
+        </div>
       </div>
     </div>
   );

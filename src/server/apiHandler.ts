@@ -49,6 +49,11 @@ import {
   verifyGitHubToken,
   formatGitHubAuthHeader,
 } from './githubServer.js';
+import {
+  BuildEngine,
+  detectFrameworkAndLanguage,
+  rollbackProductionDeployment,
+} from './buildPipeline/index.js';
 
 interface WaitlistEntry {
   email: string;
@@ -1824,145 +1829,55 @@ export async function handleApiRequest(
         }
       }
 
-      // 4. Upload EVERY file to R2 storage_path (and memory edge cache)
-      const r2Config = getR2Config();
-      let uploadedToR2Count = 0;
+      // 4. Run BuildEngine across the fetched repository files
+      const engine = new BuildEngine();
+      const defaultBranch = ghRepoData?.default_branch || projectData?.git_branch || 'main';
+      const isProduction = targetBranch === defaultBranch;
 
-      for (const file of files) {
-        const safeRel = sanitizeDeploymentPath(file.relativePath);
-        const mime = getMimeType(safeRel);
+      const buildResult = await engine.executeBuild(
+        files,
+        {
+          deploymentId,
+          projectId,
+          projectSlug,
+          organizationId: orgId,
+          branch: targetBranch,
+          commitSha,
+          isProduction,
+          envVars: body.envVars || {},
+          customBuildCommand: body.buildCommand,
+          customInstallCommand: body.installCommand,
+          customOutputDir: body.outputDirectory,
+          customRootDirectory: body.rootDirectory,
+          customFramework: body.framework,
+        },
+        sb
+      );
 
-        // Store in memory cache for instant public serving
-        storeMemoryDeploymentFile(deploymentId, safeRel, file.buffer, mime);
-
-        // Upload to Cloudflare R2 if configured
-        if (r2Config.isConfigured) {
-          const key = `${storagePath}/${safeRel}`;
-          try {
-            await uploadDeploymentFileBuffer(key, file.buffer, mime);
-            uploadedToR2Count++;
-          } catch (uploadErr: any) {
-            console.error('[GITHUB_DEPLOY_UPLOAD_FAIL]', {
-              key,
-              error: uploadErr?.message || uploadErr,
-            });
-            throw new Error(
-              `Failed to upload ${file.relativePath} to Cloudflare R2: ${uploadErr.message}`
-            );
-          }
-        }
-      }
-
-      console.log('[GITHUB_DEPLOY_ALL_FILES_STORED]', {
-        deploymentId,
-        totalFiles: files.length,
-        uploadedToR2Count,
-      });
-
-      // 5. Mark deployment record READY only after every file has been successfully stored
-      const completedAt = new Date().toISOString();
-      if (sb) {
-        try {
-          const { error: upErr } = await sb
-            .from('deployments')
-            .update({ status: 'ready', completed_at: completedAt })
-            .eq('id', deploymentId);
-
-          if (upErr) {
-            console.warn('[GITHUB_DEPLOY] DB status update notice:', upErr.message);
-          }
-
-          // Insert completion deployment logs
-          await sb.from('deployment_logs').insert([
-            {
-              deployment_id: deploymentId,
-              message: `Uploaded ${uploadedToR2Count || files.length} file(s) to edge storage (${storagePath})`,
-              level: 'info',
-              created_at: new Date().toISOString(),
-            },
-            {
-              deployment_id: deploymentId,
-              message: `Deployment READY. Live at ${deploymentUrl}`,
-              level: 'success',
-              created_at: completedAt,
-            },
-          ]);
-        } catch (upErr: any) {
-          console.warn('[GITHUB_DEPLOY] DB status update notice:', upErr.message);
-        }
-      }
-
-      // Update in-memory deployment cache
-      cacheDeploymentRecord({
-        id: deploymentId,
-        project_id: projectId,
-        organization_id: orgId,
-        status: 'ready',
-        storage_path: storagePath,
-        createdAt: Date.now(),
-      });
-
-      // Automatically promote to active production deployment
-      setProductionDeployment(projectId, deploymentId, projectSlug);
-
-      // Persist production target and deployment metadata to R2 if configured
-      if (r2Config.isConfigured) {
-        try {
-          const r2Client = getR2Client();
-          if (r2Client && r2Config.bucketName) {
-            const metaPayload = JSON.stringify({
-              id: deploymentId,
-              project_id: projectId,
-              organization_id: orgId,
-              status: 'ready',
-              storage_path: storagePath,
-              completed_at: completedAt,
-            });
-            await r2Client.send(
-              new PutObjectCommand({
-                Bucket: r2Config.bucketName,
-                Key: `deployments/_meta/${deploymentId}.json`,
-                Body: Buffer.from(metaPayload, 'utf-8'),
-                ContentType: 'application/json',
-              })
-            );
-
-            const prodPayload = JSON.stringify({
-              projectId,
-              projectSlug,
-              productionDeploymentId: deploymentId,
-              promotedAt: completedAt,
-            });
-            await r2Client.send(
-              new PutObjectCommand({
-                Bucket: r2Config.bucketName,
-                Key: `projects/${projectSlug.toLowerCase().trim()}/production.json`,
-                Body: Buffer.from(prodPayload, 'utf-8'),
-                ContentType: 'application/json',
-              })
-            );
-          }
-        } catch (metaErr: any) {
-          console.warn('[GITHUB_DEPLOY] Notice persisting metadata in R2:', metaErr.message);
-        }
+      if (!buildResult.success) {
+        throw new Error(buildResult.error || 'Build execution failed');
       }
 
       console.log('[GITHUB_DEPLOY_READY]', {
         deploymentId,
         projectId,
         projectSlug,
-        totalFiles: files.length,
+        framework: buildResult.framework,
+        runtimeType: buildResult.runtimeType,
+        totalFiles: buildResult.outputFilesCount,
         productionDomain: `https://${projectSlug}.host.doy.best`,
       });
 
       return sendJson(res, 200, {
         success: true,
         deploymentId,
-        fileCount: files.length,
+        fileCount: buildResult.outputFilesCount,
+        framework: buildResult.framework,
+        runtimeType: buildResult.runtimeType,
         commitSha,
         branch: targetBranch,
         status: 'ready',
-        deploymentUrl,
+        deploymentUrl: buildResult.deploymentUrl,
         productionDomain: `https://${projectSlug}.host.doy.best`,
       });
     } catch (err: any) {
@@ -2003,6 +1918,116 @@ export async function handleApiRequest(
           ? 'GitHub authorization expired/reconnect GitHub'
           : err?.message || 'Failed to deploy GitHub repository.',
       });
+    }
+  }
+
+  // 8b-10. POST /api/hosting?action=detect-framework
+  if (
+    ((pathname === '/api/hosting' && action === 'detect-framework') ||
+      pathname.startsWith('/api/hosting/detect-framework')) &&
+    method === 'POST'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user?.id) {
+        return sendJson(res, 401, { success: false, error: 'Unauthorized. Sign in required.' });
+      }
+
+      const body = await parseJsonBody(req);
+      const { owner, repo, branch = 'main', rootDirectory = '' } = body;
+
+      if (!owner || !repo) {
+        return sendJson(res, 400, { success: false, error: 'owner and repo are required.' });
+      }
+
+      const connection = await getGitHubConnection(user.id);
+      if (!connection?.accessToken) {
+        return sendJson(res, 401, { success: false, error: 'GitHub authorization expired/reconnect GitHub' });
+      }
+
+      const { files } = await fetchRepositoryContentsRecursive(
+        connection.accessToken,
+        owner,
+        repo,
+        branch
+      );
+
+      const detection = detectFrameworkAndLanguage(files, rootDirectory);
+      return sendJson(res, 200, { success: true, detection });
+    } catch (err: any) {
+      console.error('[API /api/hosting/detect-framework] Error:', err);
+      return sendJson(res, 500, { success: false, error: err?.message || 'Failed to detect framework.' });
+    }
+  }
+
+  // 8b-11. POST /api/hosting?action=rollback
+  if (
+    ((pathname === '/api/hosting' && action === 'rollback') ||
+      pathname.startsWith('/api/hosting/rollback')) &&
+    method === 'POST'
+  ) {
+    try {
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const user = await verifyUserToken(authHeader);
+      if (!user?.id) {
+        return sendJson(res, 401, { success: false, error: 'Unauthorized. Sign in required.' });
+      }
+
+      const body = await parseJsonBody(req);
+      const { projectId, deploymentId: targetDeploymentId } = body;
+
+      if (!projectId || !targetDeploymentId) {
+        return sendJson(res, 400, { success: false, error: 'projectId and deploymentId are required.' });
+      }
+
+      const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+      const sb = getSupabaseServerClient(token);
+
+      const result = await rollbackProductionDeployment(projectId, targetDeploymentId, user, sb);
+      return sendJson(res, result.success ? 200 : 400, result);
+    } catch (err: any) {
+      console.error('[API /api/hosting/rollback] Error:', err);
+      return sendJson(res, 500, { success: false, error: err?.message || 'Failed to rollback deployment.' });
+    }
+  }
+
+  // 8b-12. GET /api/hosting?action=deployment-logs
+  if (
+    ((pathname === '/api/hosting' && action === 'deployment-logs') ||
+      pathname.startsWith('/api/hosting/deployment-logs')) &&
+    method === 'GET'
+  ) {
+    try {
+      const parsed = new URL(url, 'http://localhost');
+      const deploymentId = parsed.searchParams.get('deploymentId') || '';
+
+      if (!deploymentId) {
+        return sendJson(res, 400, { success: false, error: 'deploymentId query param is required.' });
+      }
+
+      const authHeader = req.headers['authorization'] as string | undefined;
+      const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+      const sb = getSupabaseServerClient(token);
+
+      if (!sb) {
+        return sendJson(res, 200, { success: true, logs: [] });
+      }
+
+      const { data: logs, error: logsErr } = await sb
+        .from('deployment_logs')
+        .select('*')
+        .eq('deployment_id', deploymentId)
+        .order('created_at', { ascending: true });
+
+      if (logsErr) {
+        return sendJson(res, 500, { success: false, error: logsErr.message });
+      }
+
+      return sendJson(res, 200, { success: true, logs: logs || [] });
+    } catch (err: any) {
+      console.error('[API /api/hosting/deployment-logs] Error:', err);
+      return sendJson(res, 500, { success: false, error: err?.message || 'Failed to fetch deployment logs.' });
     }
   }
 

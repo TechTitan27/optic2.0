@@ -256,6 +256,58 @@ class GitHubService {
       };
     }
   }
+
+  /**
+   * Detect framework and runtime from repository files
+   */
+  async detectFramework(
+    owner: string,
+    repo: string,
+    branch: string = 'main',
+    rootDirectory: string = ''
+  ): Promise<{ success: boolean; detection?: any; error?: string }> {
+    try {
+      const token = await this.getAuthToken();
+      if (!token) return { success: false, error: 'Unauthorized.' };
+
+      const res = await fetch('/api/hosting?action=detect-framework', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ owner, repo, branch, rootDirectory }),
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Framework detection failed' };
+    }
+  }
+
+  /**
+   * Rollback project to previous deployment
+   */
+  async rollbackDeployment(
+    projectId: string,
+    deploymentId: string
+  ): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      const token = await this.getAuthToken();
+      if (!token) return { success: false, error: 'Unauthorized.' };
+
+      const res = await fetch('/api/hosting?action=rollback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ projectId, deploymentId }),
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Rollback failed' };
+    }
+  }
 }
 
 export const githubService = new GitHubService();

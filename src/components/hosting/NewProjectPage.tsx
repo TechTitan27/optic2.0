@@ -59,44 +59,155 @@ interface NewProjectPageProps {
 }
 
 type ImportSource = 'github' | 'manual';
-type FrameworkKey = 'vite' | 'react' | 'nextjs' | 'astro' | 'static';
+export type FrameworkKey =
+  | 'vite'
+  | 'react'
+  | 'nextjs'
+  | 'nextjs-ssr'
+  | 'vue'
+  | 'nuxt'
+  | 'svelte'
+  | 'angular'
+  | 'astro'
+  | 'fastapi'
+  | 'flask'
+  | 'django'
+  | 'express'
+  | 'nestjs'
+  | 'go'
+  | 'rust'
+  | 'php'
+  | 'static';
 
-interface FrameworkOption {
+export interface FrameworkOption {
   key: FrameworkKey;
   label: string;
   badge: string;
   defaultBuildCommand: string;
   defaultOutputDirectory: string;
+  runtimeType: 'static' | 'server';
 }
 
-const FRAMEWORKS: FrameworkOption[] = [
+export const FRAMEWORKS: FrameworkOption[] = [
   {
     key: 'vite',
-    label: 'Vite / React',
+    label: 'Vite / React / Vue',
     badge: 'Standard',
     defaultBuildCommand: 'npm run build',
     defaultOutputDirectory: 'dist',
+    runtimeType: 'static',
   },
   {
     key: 'nextjs',
-    label: 'Next.js (Static)',
+    label: 'Next.js (Static Export)',
     badge: 'Export',
     defaultBuildCommand: 'npm run build',
     defaultOutputDirectory: 'out',
+    runtimeType: 'static',
+  },
+  {
+    key: 'nextjs-ssr',
+    label: 'Next.js (SSR / Hybrid)',
+    badge: 'Server',
+    defaultBuildCommand: 'npm run build',
+    defaultOutputDirectory: '.next',
+    runtimeType: 'server',
+  },
+  {
+    key: 'svelte',
+    label: 'Svelte / SvelteKit',
+    badge: 'Fast',
+    defaultBuildCommand: 'npm run build',
+    defaultOutputDirectory: 'dist',
+    runtimeType: 'static',
+  },
+  {
+    key: 'angular',
+    label: 'Angular',
+    badge: 'Enterprise',
+    defaultBuildCommand: 'npm run build',
+    defaultOutputDirectory: 'dist',
+    runtimeType: 'static',
   },
   {
     key: 'astro',
     label: 'Astro',
-    badge: 'Fast',
+    badge: 'Content',
     defaultBuildCommand: 'npm run build',
     defaultOutputDirectory: 'dist',
+    runtimeType: 'static',
+  },
+  {
+    key: 'fastapi',
+    label: 'Python FastAPI',
+    badge: 'Python',
+    defaultBuildCommand: 'pip install -r requirements.txt',
+    defaultOutputDirectory: '.',
+    runtimeType: 'server',
+  },
+  {
+    key: 'flask',
+    label: 'Python Flask',
+    badge: 'Python',
+    defaultBuildCommand: 'pip install -r requirements.txt',
+    defaultOutputDirectory: '.',
+    runtimeType: 'server',
+  },
+  {
+    key: 'django',
+    label: 'Python Django',
+    badge: 'Python',
+    defaultBuildCommand: 'pip install -r requirements.txt && python manage.py collectstatic --noinput',
+    defaultOutputDirectory: 'staticfiles',
+    runtimeType: 'server',
+  },
+  {
+    key: 'express',
+    label: 'Node.js Express / Fastify',
+    badge: 'Node.js',
+    defaultBuildCommand: 'npm run build',
+    defaultOutputDirectory: '.',
+    runtimeType: 'server',
+  },
+  {
+    key: 'nestjs',
+    label: 'NestJS Backend',
+    badge: 'TypeScript',
+    defaultBuildCommand: 'npm run build',
+    defaultOutputDirectory: 'dist',
+    runtimeType: 'server',
+  },
+  {
+    key: 'go',
+    label: 'Go Web Application',
+    badge: 'Go',
+    defaultBuildCommand: 'go build -o app .',
+    defaultOutputDirectory: '.',
+    runtimeType: 'server',
+  },
+  {
+    key: 'rust',
+    label: 'Rust Application',
+    badge: 'Rust',
+    defaultBuildCommand: 'cargo build --release',
+    defaultOutputDirectory: 'target/release',
+    runtimeType: 'server',
+  },
+  {
+    key: 'php',
+    label: 'PHP / Laravel',
+    badge: 'PHP',
+    defaultBuildCommand: 'composer install --no-dev --optimize-autoloader',
+    defaultOutputDirectory: 'public',
+    runtimeType: 'server',
   },
   {
     key: 'static',
-    label: 'Static HTML / Assets',
+    label: 'Static HTML / CSS / JS',
     badge: 'Zero Config',
     defaultBuildCommand: '',
     defaultOutputDirectory: '.',
+    runtimeType: 'static',
   },
 ];
 
@@ -143,6 +254,9 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
   const [projectDescription, setProjectDescription] = useState('');
   const [selectedFramework, setSelectedFramework] = useState<FrameworkKey>('vite');
   const [rootDirectory, setRootDirectory] = useState('');
+  const [customBuildCommand, setCustomBuildCommand] = useState<string>('');
+  const [customOutputDirectory, setCustomOutputDirectory] = useState<string>('');
+  const [autoDetected, setAutoDetected] = useState<{ frameworkName: string; languageName: string } | null>(null);
 
   // Form submission state
   const [submitting, setSubmitting] = useState(false);
@@ -329,6 +443,34 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
     } finally {
       setLoadingBranches(false);
     }
+
+    // Auto-detect framework and language from repository files
+    try {
+      const detectRes = await githubService.detectFramework(
+        repo.owner.login,
+        repo.name,
+        repo.defaultBranch || 'main'
+      );
+      if (detectRes.success && detectRes.detection) {
+        const detectedFw = detectRes.detection.framework as FrameworkKey;
+        const matched = FRAMEWORKS.find((f) => f.key === detectedFw);
+        if (matched) {
+          setSelectedFramework(matched.key);
+          setCustomBuildCommand(detectRes.detection.buildCommand || matched.defaultBuildCommand);
+          setCustomOutputDirectory(detectRes.detection.outputDir || matched.defaultOutputDirectory);
+          setAutoDetected({
+            frameworkName: detectRes.detection.frameworkName,
+            languageName: detectRes.detection.languageName,
+          });
+          toast.success(
+            `Auto-detected ${detectRes.detection.frameworkName} (${detectRes.detection.languageName})`,
+            'Framework Detected'
+          );
+        }
+      }
+    } catch {
+      // Non-fatal fallback
+    }
   };
 
   // Update slug automatically when project name changes
@@ -445,6 +587,10 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
               gitRepo: repoFullName,
               projectSlug: newProject.slug,
               deploymentNote: `Initial deploy from ${repoFullName}@${deployBranch}`,
+              framework: selectedFramework,
+              buildCommand: customBuildCommand || fw.defaultBuildCommand,
+              outputDirectory: customOutputDirectory || fw.defaultOutputDirectory,
+              rootDirectory: rootDirectory.trim() || undefined,
             }),
           });
 
@@ -1206,15 +1352,26 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
 
                   {/* Framework Preset Selection */}
                   <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-900/40 space-y-3">
-                    <label className="text-xs font-medium text-zinc-300">Framework Preset</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-zinc-300">Framework & Runtime Preset</label>
+                      {autoDetected && (
+                        <span className="text-[10px] text-emerald-400 font-mono bg-emerald-950/60 border border-emerald-800/50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <Sparkles size={10} /> Auto-detected: {autoDetected.frameworkName}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                       {FRAMEWORKS.map((fw) => {
                         const selected = selectedFramework === fw.key;
                         return (
                           <button
                             key={fw.key}
                             type="button"
-                            onClick={() => setSelectedFramework(fw.key)}
+                            onClick={() => {
+                              setSelectedFramework(fw.key);
+                              setCustomBuildCommand(fw.defaultBuildCommand);
+                              setCustomOutputDirectory(fw.defaultOutputDirectory);
+                            }}
                             className={`p-3 rounded-lg border text-left transition-all flex items-center justify-between ${
                               selected
                                 ? 'border-emerald-500 bg-emerald-950/20 text-white'
@@ -1223,12 +1380,42 @@ export const NewProjectPage: React.FC<NewProjectPageProps> = ({
                           >
                             <div className="space-y-0.5">
                               <div className="text-xs font-medium">{fw.label}</div>
-                              <div className="text-[10px] text-zinc-500 font-mono">{fw.badge}</div>
+                              <div className="text-[10px] text-zinc-500 font-mono flex items-center gap-1.5">
+                                <span>{fw.badge}</span>
+                                <span>•</span>
+                                <span className={fw.runtimeType === 'server' ? 'text-amber-400' : 'text-blue-400'}>
+                                  {fw.runtimeType}
+                                </span>
+                              </div>
                             </div>
                             {selected && <Check size={14} className="text-emerald-400" />}
                           </button>
                         );
                       })}
+                    </div>
+
+                    {/* Build Command and Output Directory Overrides */}
+                    <div className="pt-3 border-t border-zinc-800/60 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <label className="text-[11px] font-medium text-zinc-400 block mb-1">Build Command</label>
+                        <input
+                          type="text"
+                          value={customBuildCommand}
+                          onChange={(e) => setCustomBuildCommand(e.target.value)}
+                          placeholder="npm run build"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-zinc-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-medium text-zinc-400 block mb-1">Output Directory</label>
+                        <input
+                          type="text"
+                          value={customOutputDirectory}
+                          onChange={(e) => setCustomOutputDirectory(e.target.value)}
+                          placeholder="dist"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-zinc-600"
+                        />
+                      </div>
                     </div>
                   </div>
 
